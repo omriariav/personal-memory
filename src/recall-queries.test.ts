@@ -48,10 +48,10 @@ test("noExpand keeps only primary and agent phrasings; blank agent phrasings are
 });
 
 test("keyword phrase drops stopwords and single-char tokens; entity phrase keeps capitalized runs", () => {
-  const qs = buildRecallQueries(["Is the A/B test for Realize Studio on?"]);
+  const qs = buildRecallQueries(["Is the A/B test for Acme Studio on?"]);
   const cli = qs.filter((x) => x.origin === "cli").map((x) => x.text);
   // "Is" is a stopword; single letters survive the entity regex (documented quirk).
-  assert.deepEqual(cli, ["test realize studio", "A B Realize Studio"]);
+  assert.deepEqual(cli, ["test acme studio", "A B Acme Studio"]);
 });
 
 test("resolved people are appended to the entity phrasing as slugs and names, deduped, even when no capitalized run exists", () => {
