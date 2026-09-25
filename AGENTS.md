@@ -149,6 +149,16 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
 - **Recall guarantees:** filtered `query` runs are exhaustive when the filter
   matches ≤200 entries (every match is ranked — nothing droppable before the
   k-cut); unfiltered runs use corpus-scaled candidate pools.
+- **Ranking is measured, not guessed:** the pure pipeline lives in
+  `src/ranking.ts` (tunables in `src/ranking-tunables.ts`; every knob has an
+  identity default, overridable per process via `MEMORY_RANK_<NAME>`).
+  `npm run eval` scores a deterministic synthetic corpus (`src/eval-corpus.ts`,
+  cached under `.cache/eval/`) against the committed `docs/eval/baseline-4k.json`
+  — needles, near-duplicates, paraphrases, nickname aliases, follows chains,
+  filters, exact titles — and `memory eval run --compare` scores the real store
+  against the private golden set in `memory/eval/` (CLI-written only; see
+  MEMORY-GUARDRAILS.md). A ranking change ships only when the targeted case
+  family improves and nothing regresses beyond 0.01 on recall@10, MRR, nDCG@10.
 
 ## Rules
 

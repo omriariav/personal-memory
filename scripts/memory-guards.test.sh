@@ -145,6 +145,15 @@ write_bash_case deny  'echo hi > memory/entries/foo.md'
 write_bash_case allow 'npx tsx src/cli.ts add --title "x" --type note --body "y"'
 
 echo
+echo "== write guard: the golden set is CLI-only =="
+write_file_case deny  'memory/eval/golden.json'
+write_file_case deny  '/Users/x/personal-memory/memory/eval/baseline.json'
+write_bash_case deny  'echo "{}" > memory/eval/golden.json'
+write_bash_case deny  'cp golden.json memory/eval/golden.json'
+write_bash_case allow 'npx tsx src/cli.ts eval add-golden "where did we land" --expect 2026-01-01-x'
+write_bash_case allow 'npx tsx src/cli.ts eval run --compare'
+
+echo
 echo "== guards must fail CLOSED without jq (sandboxed/mounted VM images) =="
 # A hook that exits non-zero is a NON-BLOCKING error: Claude Code logs it and
 # runs the tool anyway. So a missing dependency must never turn into "allow".

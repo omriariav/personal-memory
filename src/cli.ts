@@ -1175,6 +1175,11 @@ Usage:
   memory promote candidates [--to <graph>] [--since DATE] [--until DATE] [--limit N]
             # private entries awaiting promotion review for <graph> (default public)
   memory promote dismiss <id> [--graph <name>] [--reason "…"]   # record "not for that graph" — hidden until content changes
+  memory eval add-golden "<query>" ["<agent phrasing>" …] --expect <id,…> [filters] [--must-outrank <winner>:<loser>]… [--absent <id,…>]
+            # save a user-confirmed retrieval expectation to the private golden set (memory/eval/golden.json)
+  memory eval list | eval remove-golden <id>
+  memory eval run [--compare] [--baseline <path>] [--save-baseline] [--json <out>] [--only <id-prefix>]
+            # score the live store against the golden set; --compare (vs memory/eval/baseline.json) exits 2 on regression
   memory connectors                  # list + validate connectors/<name>.md (fetch config + extraction prompt per source)
   memory connectors mark-pulled <name> [--at ISO_TIMESTAMP]
             # record that a connector sweep completed; captures are recorded by memory add
@@ -1204,6 +1209,7 @@ async function main() {
     case "slugs": return cmdSlugs(rest);
     case "connectors": return cmdConnectors(rest);
     case "promote": return cmdPromote(rest);
+    case "eval": return (await import("./eval-cli.js")).cmdEval(rest);
     case "ui": return cmdUi(rest);
     case undefined:
     case "help":

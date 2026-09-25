@@ -79,6 +79,7 @@ four things a manual write skips:
 | `memory/summaries/**`, `memory-graphs/*/summaries/**` | ✏️ only the `## Synthesis` section of a scaffold `digest` created — then run `cli.ts index` | Edit tool |
 | `memory/connectors/**` | ✅ private connector overrides | Edit tool or web UI |
 | `memory/graphs/rules.json` | ✅ distribution-rules config | Edit tool or web UI (`#/graphs`) |
+| `memory/eval/**` | ❌ never by hand | `cli.ts eval add-golden` / `eval remove-golden` / `eval run --save-baseline` only (validates ids, checkpoints `memory/.git`) |
 | `memory-graphs/*/GRAPH.md` | ✅ graph manifests | Edit tool or web UI |
 | `.index/**` | ❌ never | rebuildable derivative; `cli.ts index` regenerates |
 

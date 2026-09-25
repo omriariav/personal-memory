@@ -168,6 +168,28 @@ an id that no longer exists — so a broken chain is visible. Slug merge
 suggestions can be permanently ignored in the web UI's maintenance screen
 (ignore button).
 
+## Golden set — turn confirmed answers into regression tests
+
+Ranking changes are gated by measurement. The private golden set
+(`memory/eval/golden.json`, versioned by the nested repo, never leaves the
+machine) holds real questions with the entry the user confirmed as the answer.
+When a recall session ends with the user confirming which cited entry was
+right, offer one line — never save automatically, the expected id is a human
+judgment:
+
+```bash
+npx tsx src/cli.ts eval add-golden "<the user's exact question>" "<phrasing you used>" --expect <confirmed-id>
+# a known follows chain: assert the latest state outranks the stale one
+npx tsx src/cli.ts eval add-golden "where did we land on X" --expect <latest-id> --must-outrank <latest-id>:<superseded-id>
+```
+
+`add-golden` validates the ids, runs the case once so the current rank is
+visible, and checkpoints `memory/.git`. `eval run --compare` scores the live
+store against `memory/eval/baseline.json` (`--save-baseline` records it) and
+exits 2 on regression; `eval list` shows each case with its last result. Never
+write `memory/eval/` by hand and never copy its contents into `docs/` — real
+titles and ids belong only in the private store.
+
 ## Principles
 
 - Ground every claim in a cited entry; if memory is silent, say so plainly.
