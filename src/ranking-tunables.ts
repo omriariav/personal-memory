@@ -58,6 +58,22 @@ export interface RankingTunables {
   ENTITY_LIST_MAX: number;
   /** Slugs present in more than this fraction of candidates are too common to count. */
   ENTITY_MAX_DF: number;
+  /**
+   * Header leg: each phrasing is also matched against a per-entry embedding
+   * of the title + metadata alone (table `memory_headers`, backfilled
+   * incrementally), fused at this weight so short title-like questions are
+   * not diluted by long bodies. 0 = off.
+   */
+  HEADER_LEG_WEIGHT: number;
+  /**
+   * Reranker (opt-in via --rerank / MEMORY_RERANK=1): the top RERANK_N
+   * signal-bearing candidates are re-scored by a local cross-encoder and
+   * blended as RERANK_ALPHA × minmax(rerank) + (1 − α) × minmax(fused).
+   * Timeline and cutoff apply after. RERANK_MAX_CHARS bounds the document text.
+   */
+  RERANK_N: number;
+  RERANK_ALPHA: number;
+  RERANK_MAX_CHARS: number;
 }
 
 /**
@@ -83,6 +99,10 @@ export const IDENTITY_TUNABLES: Readonly<RankingTunables> = Object.freeze({
   ENTITY_LEG_WEIGHT: 0,
   ENTITY_LIST_MAX: 512,
   ENTITY_MAX_DF: 0.1,
+  HEADER_LEG_WEIGHT: 0,
+  RERANK_N: 60,
+  RERANK_ALPHA: 0.7,
+  RERANK_MAX_CHARS: 1000,
 });
 
 /**

@@ -109,6 +109,28 @@ class VoyageEmbedder implements Embedder {
   }
 }
 
+/**
+ * Deterministic, model-free embedder for tests and CI (MEMORY_EMBEDDINGS=fake):
+ * a hashed bag of lowercase tokens, L2-normalized. Shares tokens ⇒ close
+ * vectors, so retrieval behaves sensibly without any download.
+ */
+export class FakeEmbedder implements Embedder {
+  readonly id = "fake:hashed-bag";
+  readonly dim = 64;
+  async embed(texts: string[]): Promise<number[][]> {
+    return texts.map((t) => {
+      const v = new Array<number>(this.dim).fill(0);
+      for (const tok of t.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+        let h = 2166136261;
+        for (let i = 0; i < tok.length; i++) h = Math.imul(h ^ tok.charCodeAt(i), 16777619);
+        v[(h >>> 0) % this.dim]! += 1;
+      }
+      const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0)) || 1;
+      return v.map((x) => x / norm);
+    });
+  }
+}
+
 let cached: Embedder | null = null;
 
 /** Resolve the configured embedder (default: local, fully private). */
@@ -125,8 +147,11 @@ export function getEmbedder(): Embedder {
     case "local":
       cached = new LocalEmbedder();
       break;
+    case "fake":
+      cached = new FakeEmbedder();
+      break;
     default:
-      throw new Error(`Unknown MEMORY_EMBEDDINGS=${backend} (use local|openai|voyage)`);
+      throw new Error(`Unknown MEMORY_EMBEDDINGS=${backend} (use local|openai|voyage|fake)`);
   }
   return cached;
 }

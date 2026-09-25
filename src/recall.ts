@@ -23,6 +23,8 @@ export interface RecallOptions {
   noExpand?: boolean;
   /** Disable the relative score cutoff (`--no-cutoff`). */
   noCutoff?: boolean;
+  /** Second pass through the local cross-encoder (`--rerank`). */
+  rerank?: boolean;
   completeness?: SearchCompleteness;
   completeLimit?: number;
   requireComplete?: boolean;
@@ -57,6 +59,8 @@ export interface RecallHit {
   digestOf?: string[];
   /** On a raw entry: returned summaries that cite it. */
   coveredBy?: string[];
+  /** Raw cross-encoder score when the hit was in the reranked block. */
+  rerankScore?: number;
   reasons?: {
     semanticRank?: number;
     lexicalRank?: number;
@@ -84,6 +88,8 @@ export interface RecallReport {
   cutoff?: { tau: number; applied: boolean; dropped: number };
   /** People named in the question, resolved through memory/people/ aliases. */
   entities?: { people: string[]; ambiguous: string[] };
+  /** Reranker pass, when requested. */
+  rerank?: { model: string; n: number; ms: number };
   warnings: string[];
   hits: RecallHit[];
 }
@@ -108,6 +114,7 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     ...(opts.tunables ? { tunables: opts.tunables } : {}),
     ...(opts.noCutoff ? { noCutoff: true } : {}),
+    ...(opts.rerank !== undefined ? { rerank: opts.rerank } : {}),
   });
 
   const warnings: string[] = [];
@@ -144,6 +151,7 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
     chunkRows: search.report.chunkRows,
     ...(search.report.cutoff ? { cutoff: search.report.cutoff } : {}),
     ...(search.report.entities ? { entities: search.report.entities } : {}),
+    ...(search.report.rerank ? { rerank: search.report.rerank } : {}),
     warnings,
     hits: search.hits.map((h) => ({
       id: h.entry.id,
@@ -166,6 +174,7 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
       ...(h.spreadFrom ? { spreadFrom: h.spreadFrom } : {}),
       ...(h.digestOf ? { digestOf: h.digestOf } : {}),
       ...(h.coveredBy ? { coveredBy: h.coveredBy } : {}),
+      ...(h.rerankScore !== undefined ? { rerankScore: h.rerankScore } : {}),
       ...(h.reasons ? { reasons: h.reasons } : {}),
     })),
   };

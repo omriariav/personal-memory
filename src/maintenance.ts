@@ -73,6 +73,12 @@ export async function runMaintenance(threshold: number): Promise<void> {
   if (idx.staleEntries + idx.missingEntries > 0 || !lex || lex.docs !== idx.totalEntries) {
     console.log("→ fix: npx tsx src/cli.ts index");
   }
+  const { headerLegEnabled, headerStatus } = await import("./store.js");
+  if (headerLegEnabled()) {
+    const hs = await headerStatus();
+    console.log(`headers: ${hs.headers}/${hs.entries} entries have a title vector${hs.missing ? ` · ${hs.missing} awaiting backfill` : ""}`);
+    if (hs.missing > 0) console.log("→ fill: npx tsx src/cli.ts index --optimize   (bounded batches; the weekly job also runs it)");
+  }
 
   console.log("\n## Connectors");
   const { loadConnectors } = await import("./connectors.js");

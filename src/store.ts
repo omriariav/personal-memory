@@ -3,7 +3,7 @@ import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import type { OptimizeStats } from "@lancedb/lancedb";
 import { getEmbedder, type Embedder } from "./embed.js";
-import { chunkEntry, displayChunkText, entrySearchText, hashEntry, loadAllEntries, INDEX_DIR } from "./ingest.js";
+import { chunkEntry, displayChunkText, entrySearchText, hashEntry, headerText, loadAllEntries, INDEX_DIR } from "./ingest.js";
 import { packSlugs, type GraphId, type MemoryEntry, type MemoryRecord } from "./schema.js";
 import { readLexical, buildLexical, syncLexical, bm25Scores, tokenize } from "./lexical.js";
 import { buildChainIndex, type ChainAnnotation } from "./chains.js";
@@ -59,6 +59,67 @@ export { applyFilters, type QueryOrigin, type QuerySpec, type SearchCompleteness
 
 const META_PATH = join(INDEX_DIR, "meta.json");
 const TABLE = "memory";
+/**
+ * One row per entry: the embedding of title + metadata alone (the header
+ * leg). Lives BESIDE the chunk table so adding it never touches existing
+ * vectors: changed entries get their row at sync time, the rest are
+ * backfilled in bounded batches by `optimizeIndex` / `index --optimize`.
+ */
+const HEADERS_TABLE = "memory_headers";
+export const HEADER_BACKFILL_BATCH = 500;
+
+/** Same filter columns as the chunk table so `whereClause` prefilters apply. */
+interface HeaderRecord {
+  id: string;
+  hash: string;
+  date: string;
+  type: string;
+  people: string;
+  teams: string;
+  tags: string;
+  graphs: string;
+  text: string;
+  vector: number[];
+}
+
+async function headerRecordsFor(entries: MemoryEntry[], embedder: Embedder): Promise<HeaderRecord[]> {
+  const texts = entries.map(headerText);
+  const vectors = await embedder.embed(texts);
+  return entries.map((e, i) => ({
+    id: e.id,
+    hash: hashEntry(e),
+    date: e.date,
+    type: e.type,
+    people: packSlugs(e.people),
+    teams: packSlugs(e.teams),
+    tags: packSlugs(e.tags),
+    graphs: packSlugs(e.graphs),
+    text: texts[i]!,
+    vector: vectors[i]!,
+  }));
+}
+
+/** The header leg is opt-in (HEADER_LEG_WEIGHT > 0); its table is not built otherwise. */
+export function headerLegEnabled(): boolean {
+  return resolveTunables().HEADER_LEG_WEIGHT > 0;
+}
+
+async function openHeaders(db: lancedb.Connection) {
+  const names = await db.tableNames();
+  return names.includes(HEADERS_TABLE) ? db.openTable(HEADERS_TABLE) : null;
+}
+
+async function upsertHeaders(db: lancedb.Connection, records: HeaderRecord[]): Promise<void> {
+  if (records.length === 0) return;
+  const rows = records as unknown as Record<string, unknown>[];
+  const table = await openHeaders(db);
+  if (!table) {
+    await db.createTable(HEADERS_TABLE, rows);
+    return;
+  }
+  await table.delete(`id IN (${sqlList(records.map((r) => r.id))})`);
+  await table.add(rows);
+}
 
 /**
  * Bump when the row schema or indexing semantics change: a mismatch (including
@@ -149,6 +210,7 @@ export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
   if (force) {
     const names = await db.tableNames();
     if (names.includes(TABLE)) await db.dropTable(TABLE);
+    if (names.includes(HEADERS_TABLE)) await db.dropTable(HEADERS_TABLE);
   }
 
   let table = await openTable(db);
@@ -191,6 +253,14 @@ export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
     }
   }
 
+  // Header rows (only while the header leg is enabled — measured as a
+  // trade-off, off by default): refreshed for exactly the entries re-embedded
+  // above; removed entries drop out; untouched entries keep whatever they had
+  // (or nothing, until the backfill reaches them).
+  const headers = await openHeaders(db);
+  if (headers && removedIds.length > 0) await headers.delete(`id IN (${sqlList(removedIds)})`);
+  if (changed.length > 0 && headerLegEnabled()) await upsertHeaders(db, await headerRecordsFor(changed, embedder));
+
   await writeMeta({ embedderId: embedder.id, dim: embedder.dim, indexVersion: INDEX_VERSION });
   await syncLexical(entries);
   return { added: changed.length, removed: removedIds.length, unchanged };
@@ -206,22 +276,85 @@ export interface IndexStatus {
   chunkRows: number;
 }
 
+export interface HeaderStatus {
+  entries: number;
+  /** Entries whose header row matches their current content hash. */
+  headers: number;
+  /** Entries still awaiting a header row (backfill). */
+  missing: number;
+}
+
+/** Which entries lack a current header row: (id, hash) not present in the headers table. */
+async function headerGaps(db: lancedb.Connection, entries: MemoryEntry[]): Promise<MemoryEntry[]> {
+  const headers = await openHeaders(db);
+  const have = new Map<string, string>();
+  if (headers) {
+    const rows = (await headers.query().select(["id", "hash"]).toArray()) as { id: string; hash: string }[];
+    for (const r of rows) have.set(r.id, r.hash);
+  }
+  return entries.filter((e) => have.get(e.id) !== hashEntry(e));
+}
+
+/** Read-only header coverage for `maintenance`. Never loads the embedder. */
+export async function headerStatus(): Promise<HeaderStatus> {
+  const entries = await loadAllEntries();
+  let missing = entries.length;
+  try {
+    const db = await lancedb.connect(INDEX_DIR);
+    missing = (await headerGaps(db, entries)).length;
+  } catch {
+    // no index yet
+  }
+  return { entries: entries.length, headers: entries.length - missing, missing };
+}
+
+/**
+ * Embed header rows for up to `batch` entries that lack one. Bounded so the
+ * weekly job and `index --optimize` never block for a whole corpus; existing
+ * chunk vectors are never touched.
+ */
+export async function backfillHeaders(opts: { batch?: number } = {}): Promise<{ embedded: number; remaining: number }> {
+  if (!headerLegEnabled()) return { embedded: 0, remaining: 0 };
+  const batch = opts.batch ?? HEADER_BACKFILL_BATCH;
+  const entries = await loadAllEntries();
+  await mkdir(INDEX_DIR, { recursive: true });
+  const db = await lancedb.connect(INDEX_DIR);
+  const gaps = await headerGaps(db, entries);
+  const todo = gaps.slice(0, batch);
+  if (todo.length > 0) await upsertHeaders(db, await headerRecordsFor(todo, getEmbedder()));
+  return { embedded: todo.length, remaining: gaps.length - todo.length };
+}
+
+/** Test seam: forget every header row (simulates an index built before the header leg existed). */
+export async function dropHeadersForTest(): Promise<void> {
+  const db = await lancedb.connect(INDEX_DIR);
+  if ((await db.tableNames()).includes(HEADERS_TABLE)) await db.dropTable(HEADERS_TABLE);
+}
+
 export interface OptimizeIndexResult {
   tableExists: boolean;
   cleanupOlderThan: string;
   stats: OptimizeStats | null;
+  /** Header backfill progress made by this call. */
+  headers: { embedded: number; remaining: number };
 }
 
-export async function optimizeIndex(cleanupOlderThanDays = 7): Promise<OptimizeIndexResult> {
+export async function optimizeIndex(
+  cleanupOlderThanDays = 7,
+  opts: { headerBatch?: number } = {},
+): Promise<OptimizeIndexResult> {
   await mkdir(INDEX_DIR, { recursive: true });
   const db = await lancedb.connect(INDEX_DIR);
   const table = await openTable(db);
   const cleanupOlderThan = new Date(Date.now() - cleanupOlderThanDays * 24 * 60 * 60 * 1000);
   if (!table) {
-    return { tableExists: false, cleanupOlderThan: cleanupOlderThan.toISOString(), stats: null };
+    return { tableExists: false, cleanupOlderThan: cleanupOlderThan.toISOString(), stats: null, headers: { embedded: 0, remaining: 0 } };
   }
   const stats = await table.optimize({ cleanupOlderThan });
-  return { tableExists: true, cleanupOlderThan: cleanupOlderThan.toISOString(), stats };
+  const headers = await backfillHeaders({ batch: opts.headerBatch });
+  const ht = await openHeaders(db);
+  if (ht) await ht.optimize({ cleanupOlderThan });
+  return { tableExists: true, cleanupOlderThan: cleanupOlderThan.toISOString(), stats, headers };
 }
 
 /**
@@ -275,6 +408,8 @@ export interface SearchHitReason {
   lexicalRank?: number;
   /** Rank in the entity list (entries carrying people named in the question). */
   entityRank?: number;
+  /** Best rank in the header (title + metadata vector) lists. */
+  headerRank?: number;
   matchedTerms: string[];
   retrievalSignals: string[];
 }
@@ -291,6 +426,8 @@ export interface SearchHit {
   digestOf?: string[];
   /** On a raw entry: returned summaries that cite it. */
   coveredBy?: string[];
+  /** Raw cross-encoder score when the hit was in the reranked block. */
+  rerankScore?: number;
   reasons?: SearchHitReason;
 }
 
@@ -335,6 +472,8 @@ export interface SearchReport {
   cutoff?: { tau: number; applied: boolean; dropped: number };
   /** People named in the question (resolved through memory/people/ aliases). */
   entities?: { people: string[]; ambiguous: string[] };
+  /** Reranker pass, when requested. */
+  rerank?: { model: string; n: number; ms: number };
 }
 
 export interface SearchResult {
@@ -354,6 +493,8 @@ export interface SearchOptions {
   tunables?: Partial<RankingTunables>;
   /** Disable the relative score cutoff for this run (`--no-cutoff`). */
   noCutoff?: boolean;
+  /** Re-score the top RERANK_N candidates with the local cross-encoder (`--rerank`, MEMORY_RERANK=1). */
+  rerank?: boolean;
 }
 
 export const DEFAULT_COMPLETE_LIMIT = EXHAUSTIVE_LIMIT;
@@ -472,6 +613,21 @@ export async function searchDetailed(
       }
       rankLists.push({ kind: "semantic", query, ids });
     }
+
+    // Header leg: the same phrasings against title+metadata vectors. Entries
+    // without a header row yet simply don't appear here (graceful backfill).
+    if (tunables.HEADER_LEG_WEIGHT > 0) {
+      const headers = await openHeaders(db);
+      if (headers && (await headers.countRows()) > 0) {
+        for (const [i, qvec] of vecs.entries()) {
+          let hq = headers.search(qvec) as lancedb.VectorQuery;
+          if (where) hq = hq.where(where) as lancedb.VectorQuery;
+          const rows = (await hq.select(["id"]).limit(pool).toArray()) as { id: string }[];
+          const ids = rows.map((r) => r.id).filter((id) => filteredIds.has(id));
+          rankLists.push({ kind: "header", query: qs[i]!, ids: [...new Set(ids)] });
+        }
+      }
+    }
   }
 
   // --- lexical ranking lists, one per phrasing, within the filtered set ---
@@ -506,22 +662,48 @@ export async function searchDetailed(
     // matches lexically, and boosting its every entry cost exact-title lookups.
     entityMatches = entityMatchesFor(detection.aliased, filtered, tunables.ENTITY_MAX_DF);
   }
-  const ranked = rankCandidates({ rankLists, filtered, exhaustive, k, timeline, edges, entityMatches }, tunables, now);
+  const rankInput = { rankLists, filtered, exhaustive, k, timeline, edges, entityMatches };
+  let ranked = rankCandidates(rankInput, tunables, now);
   if (ranked.entityList) rankLists.push(ranked.entityList);
+
+  // Opt-in second pass: a local cross-encoder re-scores the top signal-bearing
+  // candidates; the pure pipeline blends them, then lift/timeline/cutoff apply.
+  let rerankReport: SearchReport["rerank"];
+  if (opts.rerank ?? process.env.MEMORY_RERANK === "1") {
+    const { getReranker } = await import("./rerank.js");
+    const reranker = getReranker();
+    const block = ranked.hits.filter((h) => h.score > 0).slice(0, tunables.RERANK_N);
+    // The k-cut may have hidden part of the block: rank once more without a cut.
+    const wide = block.length < tunables.RERANK_N ? rankCandidates({ ...rankInput, k: tunables.RERANK_N }, tunables, now) : ranked;
+    const candidates = wide.hits.filter((h) => h.score > 0).slice(0, tunables.RERANK_N);
+    const t0 = performance.now();
+    const docs = candidates.map((h) => {
+      const e = byId.get(h.id)!;
+      return `${e.title}\n${displayChunkText(bestChunk.get(h.id) ?? e.body)}`.slice(0, tunables.RERANK_MAX_CHARS);
+    });
+    const scores = await reranker.score(qs[0]!.text, docs);
+    const rerankScores = new Map(candidates.map((h, i) => [h.id, scores[i]!]));
+    ranked = rankCandidates({ ...rankInput, rerankScores }, tunables, now);
+    rerankReport = { model: reranker.id, n: candidates.length, ms: Math.round(performance.now() - t0) };
+  }
   const { retrievalSignalCount, limitedByK } = ranked;
   const consideredCount = exhaustive ? filtered.length : retrievalSignalCount;
   const digests = digestAnnotations(ranked.hits.map(({ id }) => ({ id, sources: byId.get(id)?.sources })));
   const hits = ranked.hits.map(({ id, score, breakdown, spreadFrom }) => {
+    const rerankScore = breakdown.rerank;
     const entry = byId.get(id)!;
     const chain = chainIndex.get(id);
     const digest = digests.get(id);
     const semanticRank = bestRank(rankLists, id, "semantic");
     const lexicalRank = bestRank(rankLists, id, "lexical");
     const entityRank = bestRank(rankLists, id, "entity");
+    const headerRank = bestRank(rankLists, id, "header");
     const retrievalSignals = [
       ...(semanticRank !== undefined ? ["semantic"] : []),
       ...(lexicalRank !== undefined ? ["lexical"] : []),
+      ...(headerRank !== undefined ? ["header"] : []),
       ...(entityRank !== undefined ? ["entity"] : []),
+      ...(breakdown.rerank !== undefined ? ["rerank"] : []),
       ...(breakdown.spread > 0 ? ["spread"] : []),
       ...(score === 0 && exhaustive ? ["complete-scan"] : []),
     ];
@@ -533,9 +715,11 @@ export async function searchDetailed(
       ...(spreadFrom ? { spreadFrom } : {}),
       ...(digest?.digestOf ? { digestOf: digest.digestOf } : {}),
       ...(digest?.coveredBy ? { coveredBy: digest.coveredBy } : {}),
+      ...(rerankScore !== undefined ? { rerankScore } : {}),
       reasons: {
         ...(semanticRank !== undefined ? { semanticRank } : {}),
         ...(lexicalRank !== undefined ? { lexicalRank } : {}),
+        ...(headerRank !== undefined ? { headerRank } : {}),
         ...(entityRank !== undefined ? { entityRank } : {}),
         matchedTerms: matchedTerms(entry, qs),
         retrievalSignals,
@@ -559,6 +743,7 @@ export async function searchDetailed(
       chunkRows,
       cutoff: { tau: tunables.CUTOFF_TAU, ...ranked.cutoff },
       ...(detection ? { entities: { people: detection.slugs, ambiguous: detection.ambiguous } } : {}),
+      ...(rerankReport ? { rerank: rerankReport } : {}),
     },
   };
 }

@@ -508,12 +508,19 @@ async function cmdGraphs(argv: string[]) {
 async function cmdIndex(argv: string[]) {
   const { values } = parseArgs({
     args: argv,
-    options: { force: { type: "boolean" } },
+    options: { force: { type: "boolean" }, optimize: { type: "boolean" }, "header-batch": { type: "string" } },
   });
   const stats = await syncIndex({ force: Boolean(values.force) });
   console.log(
     `✓ index synced — ${stats.added} (re)embedded, ${stats.removed} removed, ${stats.unchanged} unchanged`,
   );
+  if (values.optimize) {
+    const { optimizeIndex } = await import("./store.js");
+    const r = await optimizeIndex(7, { headerBatch: positiveInt(values["header-batch"], 500, "--header-batch") });
+    console.log(
+      `✓ optimized — headers backfilled ${r.headers.embedded}, ${r.headers.remaining} remaining${r.headers.remaining ? " (run again to continue)" : ""}`,
+    );
+  }
 }
 
 async function cmdQuery(argv: string[]) {
@@ -530,6 +537,7 @@ async function cmdQuery(argv: string[]) {
       k: { type: "string", short: "k" },
       deep: { type: "boolean" },
       "no-cutoff": { type: "boolean" },
+      rerank: { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -542,7 +550,11 @@ async function cmdQuery(argv: string[]) {
   }
   const deep = Boolean(values.deep);
   const k = values.k ? Number(values.k) : deep ? 40 : 8;
-  const hits = await search(queries, await filtersFrom(values), k, { deep, noCutoff: Boolean(values["no-cutoff"]) });
+  const hits = await search(queries, await filtersFrom(values), k, {
+    deep,
+    noCutoff: Boolean(values["no-cutoff"]),
+    ...(values.rerank ? { rerank: true } : {}),
+  });
   if (hits.length === 0) {
     console.log("(no matches)");
     return;
@@ -631,6 +643,8 @@ async function cmdRecall(argv: string[]) {
       "no-complete": { type: "boolean" },
       "no-expand": { type: "boolean" },
       "no-cutoff": { type: "boolean" },
+      rerank: { type: "boolean" },
+      "no-rerank": { type: "boolean" },
       "show-queries": { type: "boolean" },
       shallow: { type: "boolean" },
     },
@@ -651,6 +665,7 @@ async function cmdRecall(argv: string[]) {
     deep: !values.shallow,
     noExpand: Boolean(values["no-expand"]),
     noCutoff: Boolean(values["no-cutoff"]),
+    ...(values.rerank ? { rerank: true } : values["no-rerank"] ? { rerank: false } : {}),
     completeness: recallCompleteness(values),
     completeLimit: positiveInt(values["complete-limit"], 200, "--complete-limit"),
     requireComplete: Boolean(values["require-complete"]),
@@ -1160,12 +1175,13 @@ Usage:
   memory graphs delete <slug> --confirm  # PERMANENT: blocked while entries exist only there; user must approve
   memory rules [list]                  # standing distribution rules (memory/graphs/rules.json)
   memory rules apply [--dry-run]       # reconcile all rules against existing private entries
-  memory index [--force]
+  memory index [--force] [--optimize [--header-batch N]]   # --optimize compacts + backfills title vectors (memory_headers) in bounded batches
   memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep] [--no-cutoff]
             # each quoted positional is a separate phrasing; all are fused (2-4 recommended)
             # --deep: recall-over-precision preset (k=40, wider candidate pool)
   memory recall "<question>" ["<agent phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph G] [-k N]
-            [--complete | --complete-if-small | --no-complete] [--require-complete] [--no-expand] [--no-cutoff] [--format text|json]
+            [--complete | --complete-if-small | --no-complete] [--require-complete] [--no-expand] [--no-cutoff] [--rerank|--no-rerank] [--format text|json]
+            # --rerank: opt-in second pass through a local cross-encoder (MEMORY_RERANK=1 to default on; ~1-2 s, one-time model download)
             # first phrasing is primary; extras are agent-supplied; CLI adds deterministic expansions unless --no-expand
             # default: k=40, deep pools, complete-if-small (limit 200)
             # --graph <name> scopes to one graph's members; default searches ALL (shared memberships labeled)

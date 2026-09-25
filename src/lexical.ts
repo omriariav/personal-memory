@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { INDEX_DIR, entrySearchText, hashEntry } from "./ingest.js";
+import { INDEX_DIR, LEXICAL_TITLE_REPEAT, entrySearchText, hashEntry } from "./ingest.js";
 import type { MemoryEntry } from "./schema.js";
 
 /**
@@ -11,7 +11,7 @@ import type { MemoryEntry } from "./schema.js";
  */
 
 const LEXICAL_PATH = join(INDEX_DIR, "lexical.json");
-const LEXICAL_VERSION = 2;
+const LEXICAL_VERSION = 3; // 3: records titleRepeat
 
 interface LexDoc {
   id: string;
@@ -22,6 +22,8 @@ interface LexDoc {
 
 export interface LexicalIndex {
   version: number;
+  /** Title repetitions the docs were tokenized with; a mismatch rebuilds. */
+  titleRepeat?: number;
   /** null = tombstone of a removed/re-indexed doc; ordinals stay stable. */
   docs: (LexDoc | null)[];
   /** term -> [docOrdinal, termFrequency][] (live ordinals only). */
@@ -49,13 +51,19 @@ export function tokenize(s: string): string[] {
 }
 
 function emptyIndex(): LexicalIndex {
-  return { version: LEXICAL_VERSION, docs: [], postings: {} };
+  return { version: LEXICAL_VERSION, titleRepeat: LEXICAL_TITLE_REPEAT, docs: [], postings: {} };
 }
 
 export async function readLexical(): Promise<LexicalIndex | null> {
   try {
     const idx = JSON.parse(await readFile(LEXICAL_PATH, "utf8")) as LexicalIndex;
-    if (idx.version === LEXICAL_VERSION && Array.isArray(idx.docs) && idx.postings) return idx;
+    if (
+      idx.version === LEXICAL_VERSION &&
+      (idx.titleRepeat ?? 1) === LEXICAL_TITLE_REPEAT &&
+      Array.isArray(idx.docs) &&
+      idx.postings
+    )
+      return idx;
   } catch {
     // missing or corrupt — caller falls back / sync rebuilds
   }

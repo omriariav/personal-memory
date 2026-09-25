@@ -30,7 +30,7 @@ export interface QuerySpec {
 export type SearchCompleteness = "auto" | "complete" | "complete-if-small" | "none";
 
 export interface RankList {
-  kind: "semantic" | "lexical" | "entity";
+  kind: "semantic" | "lexical" | "entity" | "header";
   query: QuerySpec;
   ids: string[];
 }
@@ -204,6 +204,8 @@ export interface RankInput {
   edges?: Map<string, string[]>;
   /** id → number of question entities (people/teams/tags) the entry carries. */
   entityMatches?: Map<string, number>;
+  /** Cross-encoder scores for the reranked block (second pass); absent = no rerank. */
+  rerankScores?: Map<string, number>;
 }
 
 export interface RankedHit {
@@ -220,6 +222,8 @@ export interface RankedHit {
     lift: number;
     /** Timeline multiplier applied (1 when not a chain member or at identity). */
     timeline: number;
+    /** Raw cross-encoder score when this hit was in the reranked block. */
+    rerank?: number;
   };
   /** Seeds whose spread or lift reached this entry (strongest first). */
   spreadFrom?: string[];
@@ -238,8 +242,7 @@ function spreadExplicit(
   byId: Map<string, Rankable>,
 ): RankedHit[] {
   const spread = t.SPREAD_EDGE_FRACTION > 0 && input.edges;
-  const lift = t.CURRENT_LIFT > 0 && input.timeline;
-  if (!spread && !lift) return base;
+  if (!spread) return base;
   const byScore = new Map(base.map((h) => [h.id, h.score]));
   const gain = new Map<string, { value: number; from: string }>();
   const lend = (to: string, value: number, from: string) => {
@@ -270,35 +273,6 @@ function spreadExplicit(
     h.spreadFrom = [g.from];
   }
 
-  // A retrieved stale member (superseded, or a resolved open item) raises the
-  // entry that holds the matter's state now to AT LEAST CURRENT_LIFT × the
-  // stale member's POST-spread score — a floor, never a bonus: a successor
-  // already ranked higher is left alone, and nothing is demoted below
-  // unrelated entries. Measured after spread because undirected edges also
-  // lend the successor's score back to the stale member.
-  const floor = new Map<string, { value: number; from: string }>();
-  if (lift) {
-    for (const h of out) {
-      const succ = input.timeline!.get(h.id)?.successor;
-      if (!succ || succ === h.id || !byId.has(succ)) continue;
-      const value = t.CURRENT_LIFT * (h.breakdown.fused * h.breakdown.recency + h.breakdown.spread);
-      const cur = floor.get(succ);
-      if (!cur || value > cur.value) floor.set(succ, { value, from: h.id });
-    }
-  }
-  for (const [id, f] of floor) {
-    let h = present.get(id);
-    if (!h) {
-      h = blank(id);
-      out.push(h);
-      present.set(id, h);
-    }
-    const own = h.breakdown.fused * h.breakdown.recency + h.breakdown.spread;
-    if (f.value > own) {
-      h.breakdown.lift = f.value;
-      h.spreadFrom = [f.from, ...(h.spreadFrom ?? []).filter((x) => x !== f.from)];
-    }
-  }
   return out;
 }
 
@@ -327,6 +301,76 @@ export function digestAnnotations(hits: { id: string; sources?: string[] }[]): M
     }
   }
   return out;
+}
+
+/**
+ * Second-pass blend for the reranked block: final = α·minmax(rerank) +
+ * (1−α)·minmax(fused), on the pre-timeline score. Candidates outside the
+ * block keep their relative order below the block (scaled under its minimum)
+ * so a reranker never promotes what it did not see. In place.
+ */
+function applyRerank(scored: RankedHit[], scores: Map<string, number> | undefined, alpha: number): void {
+  if (!scores || scores.size === 0) return;
+  const block = scored.filter((h) => scores.has(h.id));
+  if (block.length === 0) return;
+  const minmax = (xs: number[]) => {
+    const lo = Math.min(...xs);
+    const hi = Math.max(...xs);
+    return xs.map((x) => (hi > lo ? (x - lo) / (hi - lo) : 1));
+  };
+  const fusedN = minmax(block.map((h) => h.score));
+  const rerankN = minmax(block.map((h) => scores.get(h.id)!));
+  const blockMinBefore = Math.min(...block.map((h) => h.score));
+  block.forEach((h, i) => {
+    h.breakdown.rerank = scores.get(h.id)!;
+    // Keep the block's magnitude comparable to raw fused scores: scale the
+    // blend into [blockMin, blockMax] of the original scores.
+    const blockMax = Math.max(...block.map((x) => x.breakdown.fused * x.breakdown.recency + x.breakdown.spread), blockMinBefore);
+    const blended = alpha * rerankN[i]! + (1 - alpha) * fusedN[i]!;
+    h.score = blockMinBefore + blended * Math.max(blockMax - blockMinBefore, 1e-9);
+  });
+  const blockMinAfter = Math.min(...block.map((h) => h.score));
+  const rest = scored.filter((h) => !scores.has(h.id) && h.score > 0);
+  if (rest.length === 0) return;
+  const restMax = Math.max(...rest.map((h) => h.score));
+  if (restMax >= blockMinAfter) {
+    const scale = (blockMinAfter * 0.999) / restMax;
+    for (const h of rest) h.score *= scale;
+  }
+}
+
+/**
+ * A retrieved stale member (superseded, or a resolved open item) raises the
+ * entry that holds the matter's state now to AT LEAST CURRENT_LIFT × the
+ * stale member's current score — a floor, never a bonus: a successor already
+ * ranked higher is left alone, nothing is demoted below unrelated entries.
+ * Runs after spread and rerank (both can move the stale member) and before
+ * the timeline multiplier. In place; may append the successor.
+ */
+function liftStage(scored: RankedHit[], input: RankInput, t: RankingTunables, byId: Map<string, Rankable>): void {
+  if (!(t.CURRENT_LIFT > 0) || !input.timeline) return;
+  const present = new Map(scored.map((h) => [h.id, h]));
+  const floor = new Map<string, { value: number; from: string }>();
+  for (const h of scored) {
+    const succ = input.timeline.get(h.id)?.successor;
+    if (!succ || succ === h.id || !byId.has(succ)) continue;
+    const value = t.CURRENT_LIFT * h.score;
+    const cur = floor.get(succ);
+    if (!cur || value > cur.value) floor.set(succ, { value, from: h.id });
+  }
+  for (const [id, f] of floor) {
+    let h = present.get(id);
+    if (!h) {
+      h = { id, score: 0, breakdown: { fused: 0, recency: 1, spread: 0, lift: 0, timeline: 1 } };
+      scored.push(h);
+      present.set(id, h);
+    }
+    if (f.value > h.score) {
+      h.breakdown.lift = f.value;
+      h.score = f.value;
+      h.spreadFrom = [f.from, ...(h.spreadFrom ?? []).filter((x) => x !== f.from)];
+    }
+  }
 }
 
 function timelineMultiplier(state: TimelineState | undefined, t: RankingTunables): number {
@@ -393,7 +437,7 @@ function dedupeLists(lists: RankList[]): RankList[] {
 }
 
 function fuse(lists: RankList[], t: RankingTunables): Map<string, number> {
-  const legWeight = { semantic: t.SEMANTIC_WEIGHT, lexical: t.LEXICAL_WEIGHT, entity: t.ENTITY_LEG_WEIGHT };
+  const legWeight = { semantic: t.SEMANTIC_WEIGHT, lexical: t.LEXICAL_WEIGHT, entity: t.ENTITY_LEG_WEIGHT, header: t.HEADER_LEG_WEIGHT };
   const fused = new Map<string, number>();
   for (const list of t.DEDUPE_IDENTICAL_LISTS ? dedupeLists(lists) : lists) {
     const w = legWeight[list.kind] * list.query.weight;
@@ -431,11 +475,13 @@ export function rankCandidates(
 
   const scored = spreadExplicit(base, input, tunables, byId);
 
+  for (const h of scored) h.score = h.breakdown.fused * h.breakdown.recency + h.breakdown.spread;
+  applyRerank(scored, input.rerankScores, tunables.RERANK_ALPHA);
+  liftStage(scored, input, tunables, byId);
   for (const h of scored) {
     const timeline = timelineMultiplier(input.timeline?.get(h.id), tunables);
     h.breakdown.timeline = timeline;
-    const own = h.breakdown.fused * h.breakdown.recency + h.breakdown.spread;
-    h.score = Math.max(own, h.breakdown.lift) * timeline;
+    h.score *= timeline;
   }
   // Stable sort: exact ties keep first-seen (list) order.
   scored.sort((a, b) => b.score - a.score);

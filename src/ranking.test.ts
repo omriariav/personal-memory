@@ -594,3 +594,73 @@ test("digestAnnotations: a summary hit lists which of its sources were also retu
   assert.equal(ann.has("c"), false);
   assert.equal(digestAnnotations([{ id: "s", sources: ["missing"] }]).size, 0);
 });
+
+// --- header leg --------------------------------------------------------------
+
+test("header lists are a third semantic-style leg with their own weight; identity 0 drops them", () => {
+  const lists: RankList[] = [
+    { kind: "semantic", query: q("p", 1), ids: ["a"] },
+    { kind: "header", query: q("p", 1), ids: ["b", "a"] },
+  ];
+  assert.equal(IDENTITY_TUNABLES.HEADER_LEG_WEIGHT, 0);
+  const off = rankCandidates({ rankLists: lists, filtered: ENTRIES, exhaustive: false, k: 5 }, NO_RECENCY, NOW);
+  assert.deepEqual(off.hits.map((h) => h.id), ["a"]);
+  const on = rankCandidates({ rankLists: lists, filtered: ENTRIES, exhaustive: false, k: 5 }, { ...NO_RECENCY, HEADER_LEG_WEIGHT: 0.5 }, NOW);
+  assert.deepEqual(on.hits.map((h) => h.id), ["a", "b"]);
+  const by = Object.fromEntries(on.hits.map((h) => [h.id, h.score]));
+  assert.ok(Math.abs(by.a! - (1 / 61 + 0.5 / 62)) < 1e-12, `a: ${by.a}`);
+  assert.ok(Math.abs(by.b! - 0.5 / 61) < 1e-12, `b: ${by.b}`);
+  assert.equal(bestRank(lists, "b", "header"), 1);
+});
+
+// --- reranker blend ----------------------------------------------------------
+
+test("rerank: blends min-max rerank scores with min-max fused scores over the reranked block; the rest stays below it", () => {
+  const lists: RankList[] = [{ kind: "semantic", query: q("p", 1), ids: ["a", "b", "c", "d"] }];
+  const rerankScores = new Map([
+    ["a", 0.1],
+    ["b", 0.9],
+    ["c", 0.5],
+  ]); // d was beyond RERANK_N
+  const t = { ...NO_RECENCY, RERANK_ALPHA: 1 };
+  const pure = rankCandidates({ rankLists: lists, filtered: ENTRIES, exhaustive: false, k: 5, rerankScores }, t, NOW);
+  assert.deepEqual(pure.hits.map((h) => h.id), ["b", "c", "a", "d"], "alpha 1 = pure rerank order, d after the block");
+  assert.ok(pure.hits[3]!.score < pure.hits[2]!.score, "unreranked tail scores below the reranked block");
+  assert.equal(pure.hits[0]!.breakdown.rerank, 0.9);
+  assert.equal(pure.hits[3]!.breakdown.rerank, undefined);
+
+  const half = rankCandidates(
+    { rankLists: lists, filtered: ENTRIES, exhaustive: false, k: 5, rerankScores },
+    { ...NO_RECENCY, RERANK_ALPHA: 0.5 },
+    NOW,
+  );
+  // fused minmax over {a,b,c}: a=1, b=0.5, c=0; rerank minmax: a=0, b=1, c=0.5
+  // blended: a=0.5, b=0.75, c=0.25 → b, a, c
+  assert.deepEqual(half.hits.map((h) => h.id), ["b", "a", "c", "d"]);
+});
+
+test("rerank: no scores = identity; a single reranked candidate keeps its score; exhaustive appends stay at 0", () => {
+  const lists: RankList[] = [{ kind: "semantic", query: q("p", 1), ids: ["a"] }];
+  const base = rankCandidates({ rankLists: lists, filtered: ENTRIES, exhaustive: true, k: 5 }, NO_RECENCY, NOW);
+  const same = rankCandidates({ rankLists: lists, filtered: ENTRIES, exhaustive: true, k: 5, rerankScores: new Map() }, NO_RECENCY, NOW);
+  assert.deepEqual(same.hits.map((h) => [h.id, h.score]), base.hits.map((h) => [h.id, h.score]));
+  const one = rankCandidates(
+    { rankLists: lists, filtered: ENTRIES, exhaustive: true, k: 5, rerankScores: new Map([["a", 0.3]]) },
+    { ...NO_RECENCY, RERANK_ALPHA: 0.7 },
+    NOW,
+  );
+  assert.ok(one.hits[0]!.score > 0, "a keeps a positive score");
+  assert.equal(one.hits[1]!.score, 0, "complete-scan append untouched");
+});
+
+test("rerank runs before the timeline multiplier and the cutoff", () => {
+  const lists: RankList[] = [{ kind: "semantic", query: q("p", 1), ids: ["a", "b"] }];
+  const timeline = new Map([["b", { superseded: true, resolved: false, latest: false, successor: "a" }]]);
+  const out = rankCandidates(
+    { rankLists: lists, filtered: ENTRIES, exhaustive: false, k: 5, rerankScores: new Map([["a", 0.2], ["b", 0.9]]), timeline },
+    { ...NO_RECENCY, RERANK_ALPHA: 1, CURRENT_LIFT: 1.02 },
+    NOW,
+  );
+  // rerank puts b first, then the lift raises a (b's successor) just above b
+  assert.deepEqual(out.hits.map((h) => h.id), ["a", "b"]);
+});

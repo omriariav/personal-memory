@@ -108,6 +108,13 @@ const t0 = performance.now();
 const sync = await store.syncIndex();
 const buildMs = Math.round(performance.now() - t0);
 console.error(`index: +${sync.added} −${sync.removed} unchanged ${sync.unchanged} in ${(buildMs / 1000).toFixed(1)} s`);
+// Header rows are backfilled in bounded batches in production; the harness
+// evaluates the fully filled state so HEADER_LEG_WEIGHT sweeps mean something.
+for (;;) {
+  const h = await store.backfillHeaders({ batch: 2000 });
+  if (h.embedded > 0) console.error(`headers: +${h.embedded}, ${h.remaining} remaining`);
+  if (h.remaining === 0) break;
+}
 
 // warm-up (model load) — excluded from per-case latency
 const warm = await recall(["warm up"], { k: 1, now: Date.UTC(2026, 6, 1) });

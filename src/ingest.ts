@@ -266,9 +266,27 @@ export function entryMetadataText(e: MemoryEntry): string {
   return lines.filter((line) => !line.endsWith(": ")).join("\n");
 }
 
+/**
+ * How many times the title is repeated in the lexical text (BM25 has no
+ * field weighting). 1 = the established text; the evaluation harness sets
+ * MEMORY_LEXICAL_TITLE_REPEAT to measure alternatives. Recorded in the
+ * lexical index file so a change triggers an in-process rebuild.
+ */
+export const LEXICAL_TITLE_REPEAT = Math.max(1, Math.floor(Number(process.env.MEMORY_LEXICAL_TITLE_REPEAT ?? 1)) || 1);
+
 /** Full text used by the lexical index. */
-export function entrySearchText(e: MemoryEntry): string {
-  return `${entryMetadataText(e)}\n\nbody:\n${e.body}`.trim();
+export function entrySearchText(e: MemoryEntry, titleRepeat: number = LEXICAL_TITLE_REPEAT): string {
+  const extraTitles = titleRepeat > 1 ? `${Array(titleRepeat - 1).fill(`title: ${e.title}`).join("\n")}\n` : "";
+  return `${extraTitles}${entryMetadataText(e)}\n\nbody:\n${e.body}`.trim();
+}
+
+/**
+ * Title + metadata only — the text behind the header leg's per-entry vector,
+ * so a short, title-like question matches the entry it names instead of
+ * being diluted by a long body.
+ */
+export function headerText(e: MemoryEntry): string {
+  return `# ${e.title}\n\n${entryMetadataText(e)}`;
 }
 
 /**

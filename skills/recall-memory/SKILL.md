@@ -73,8 +73,12 @@ dropped before the `-k` cut. Use `--complete` to force a complete scan,
 `--no-expand` only when the supplied phrases should be used exactly. On
 non-exhaustive runs the long tail is trimmed at half the top score (the JSON
 report's `cutoff` field says how many were dropped); pass `--no-cutoff` when
-you want the full tail, e.g. when sweeping for anything loosely related. Read
-the top cited entry file(s) in full, then answer with citations (file paths).
+you want the full tail, e.g. when sweeping for anything loosely related. For a
+narrow, precision-sensitive lookup whose wording may differ from the entry's,
+add `--rerank`: a local cross-encoder re-scores the top candidates (1–2 s on
+CPU, one-time ~70 MB model download, nothing leaves the machine; the JSON
+report's `rerank` field records the model and cost). Read the top cited entry
+file(s) in full, then answer with citations (file paths).
 
 If a hit is a `summary` entry, its output includes a `sources:` line — pull the
 raw entries it cites when you need specifics behind the rollup. When a rollup

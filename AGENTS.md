@@ -144,9 +144,13 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   section into prose, then runs `index`.
 - **Index:** `.index/` — rebuildable derivatives, gitignored, never hand-edited:
   the LanceDB vector table (rows carry `people`/`teams`/`tags` as pipe-delimited
-  strings so filters prefilter the vector search), `lexical.json` (persistent
-  stemmed BM25 postings), and `entries-cache.json` (parsed-entry cache keyed by
-  mtime/size). All self-invalidate on version/model change; `rm -rf .index` +
+  strings so filters prefilter the vector search), a `memory_headers` table
+  (one title+metadata vector per entry for the header leg — added beside the
+  chunk table so existing vectors are never re-embedded; new/changed entries
+  get theirs at sync, the rest are backfilled in bounded batches by
+  `index --optimize` and the weekly job; `maintenance` shows coverage),
+  `lexical.json` (persistent stemmed BM25 postings), and `entries-cache.json`
+  (parsed-entry cache keyed by mtime/size). All self-invalidate on version/model change; `rm -rf .index` +
   `memory index` regenerates everything from the Markdown.
 
   *Why LanceDB, and when to revisit (decided 2026-07-03):* the embedded
@@ -168,6 +172,10 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   never apply) and `legacy` (`MEMORY_RANK_PROFILE=legacy`, the pre-change
   ordering bit-for-bit). Nothing is ever hidden or demoted below unrelated
   entries; a blanket penalty on superseded entries was measured and rejected.
+  Opt-in extras: `--rerank` (a local cross-encoder second pass over the top
+  candidates; `MEMORY_RERANK=1` to default on) and the header leg
+  (`MEMORY_RANK_HEADER_LEG_WEIGHT`, title+metadata vectors — measured as a
+  trade-off that costs paraphrase recall, so off and its table dormant).
   `npm run eval` scores a deterministic synthetic corpus (`src/eval-corpus.ts`,
   cached under `.cache/eval/`) against the committed `docs/eval/baseline-4k.json`
   — needles, near-duplicates, paraphrases, nickname aliases, follows chains,
