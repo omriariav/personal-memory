@@ -30,7 +30,7 @@ export interface QuerySpec {
 export type SearchCompleteness = "auto" | "complete" | "complete-if-small" | "none";
 
 export interface RankList {
-  kind: "semantic" | "lexical";
+  kind: "semantic" | "lexical" | "entity";
   query: QuerySpec;
   ids: string[];
 }
@@ -202,6 +202,8 @@ export interface RankInput {
    * already restricted to the candidate space by the caller.
    */
   edges?: Map<string, string[]>;
+  /** id → number of question entities (people/teams/tags) the entry carries. */
+  entityMatches?: Map<string, number>;
 }
 
 export interface RankedHit {
@@ -315,6 +317,34 @@ export interface RankOutput {
   limitedByK: boolean;
   /** Relative score cutoff outcome. */
   cutoff: { applied: boolean; dropped: number };
+  /** The entity list that was fused, when the entity leg is on and matched anything. */
+  entityList?: RankList;
+}
+
+/**
+ * Build the entity RRF list: entries carrying entities named in the question,
+ * strongest first — most entities matched, then prior fused score (topic +
+ * entity beats entity alone), then newest.
+ */
+function entityList(
+  matches: Map<string, number>,
+  base: Map<string, number>,
+  byId: Map<string, Rankable>,
+  t: RankingTunables,
+): RankList | undefined {
+  const ids = [...matches.keys()].filter((id) => byId.has(id));
+  if (ids.length === 0) return undefined;
+  ids.sort(
+    (a, b) =>
+      matches.get(b)! - matches.get(a)! ||
+      (base.get(b) ?? 0) - (base.get(a) ?? 0) ||
+      byId.get(b)!.date.localeCompare(byId.get(a)!.date),
+  );
+  return {
+    kind: "entity",
+    query: { text: "entities", origin: "cli", weight: 1 },
+    ids: ids.slice(0, t.ENTITY_LIST_MAX),
+  };
 }
 
 /** Drop lists whose (kind, id order) repeats an earlier one, keeping the max weight on the survivor. */
@@ -336,7 +366,7 @@ function dedupeLists(lists: RankList[]): RankList[] {
 }
 
 function fuse(lists: RankList[], t: RankingTunables): Map<string, number> {
-  const legWeight = { semantic: t.SEMANTIC_WEIGHT, lexical: t.LEXICAL_WEIGHT };
+  const legWeight = { semantic: t.SEMANTIC_WEIGHT, lexical: t.LEXICAL_WEIGHT, entity: t.ENTITY_LEG_WEIGHT };
   const fused = new Map<string, number>();
   for (const list of t.DEDUPE_IDENTICAL_LISTS ? dedupeLists(lists) : lists) {
     const w = legWeight[list.kind] * list.query.weight;
@@ -354,7 +384,13 @@ export function rankCandidates(
   now: number = Date.now(),
 ): RankOutput {
   const byId = new Map(input.filtered.map((e) => [e.id, e]));
-  const fused = fuse(input.rankLists, tunables);
+  let lists = input.rankLists;
+  let entities: RankList | undefined;
+  if (tunables.ENTITY_LEG_WEIGHT > 0 && input.entityMatches?.size) {
+    entities = entityList(input.entityMatches, fuse(lists, tunables), byId, tunables);
+    if (entities) lists = [...lists, entities];
+  }
+  const fused = fuse(lists, tunables);
 
   // Base score: fusion × recency, in first-seen (list) order.
   const base: RankedHit[] = [];
@@ -403,5 +439,6 @@ export function rankCandidates(
     retrievalSignalCount,
     limitedByK: ranked.length > input.k,
     cutoff,
+    ...(entities ? { entityList: entities } : {}),
   };
 }

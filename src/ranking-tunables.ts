@@ -48,6 +48,16 @@ export interface RankingTunables {
    */
   CUTOFF_TAU: number;
   CUTOFF_MIN_RESULTS: number;
+  /**
+   * Entity leg: entries whose people match a NICKNAME or DISPLAY NAME found
+   * in the question (resolved through memory/people/; a typed slug already
+   * matches lexically and is deliberately excluded) form one more RRF list,
+   * ordered by match count, prior score, date, fused at this weight. 0 = off.
+   */
+  ENTITY_LEG_WEIGHT: number;
+  ENTITY_LIST_MAX: number;
+  /** Slugs present in more than this fraction of candidates are too common to count. */
+  ENTITY_MAX_DF: number;
 }
 
 /**
@@ -70,6 +80,9 @@ export const IDENTITY_TUNABLES: Readonly<RankingTunables> = Object.freeze({
   SPREAD_FANOUT: 10,
   CUTOFF_TAU: 0,
   CUTOFF_MIN_RESULTS: 8,
+  ENTITY_LEG_WEIGHT: 0,
+  ENTITY_LIST_MAX: 512,
+  ENTITY_MAX_DF: 0.1,
 });
 
 /**
@@ -82,6 +95,9 @@ export const IDENTITY_TUNABLES: Readonly<RankingTunables> = Object.freeze({
  *  - SPREAD_EDGE_FRACTION 0.3: one hop over explicit links (+MRR, +nDCG).
  *  - CUTOFF_TAU 0.5: halves the returned tail at −0.7 pt recall@40;
  *    `--no-cutoff` restores it. Never applied on exhaustive runs.
+ *  - ENTITY_LEG_WEIGHT 2: entries about a person named by NICKNAME in the
+ *    question get their own fused list (all alias cases; typed slugs are
+ *    excluded — boosting them cost exact-title lookups).
  * A blanket SUPERSEDED_PENALTY was measured and rejected: it drops stale
  * members below unrelated entries instead of below their successor.
  */
@@ -91,6 +107,7 @@ export const DEFAULT_TUNABLES: Readonly<RankingTunables> = Object.freeze({
   CURRENT_LIFT: 1.02,
   SPREAD_EDGE_FRACTION: 0.3,
   CUTOFF_TAU: 0.5,
+  ENTITY_LEG_WEIGHT: 2,
 });
 
 export const ENV_PREFIX = "MEMORY_RANK_";

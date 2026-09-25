@@ -53,3 +53,16 @@ test("keyword phrase drops stopwords and single-char tokens; entity phrase keeps
   // "Is" is a stopword; single letters survive the entity regex (documented quirk).
   assert.deepEqual(cli, ["test realize studio", "A B Realize Studio"]);
 });
+
+test("resolved people are appended to the entity phrasing as slugs and names, deduped, even when no capitalized run exists", () => {
+  const qs = buildRecallQueries(["what did zhenya decide about the rollout"], {}, false, ["evgenia-ivanova"]);
+  const cli = qs.filter((x) => x.origin === "cli").map((x) => x.text);
+  assert.deepEqual(cli, [
+    "zhenya decide rollout",
+    "evgenia-ivanova evgenia ivanova",
+    "zhenya decide rollout evgenia-ivanova evgenia ivanova",
+  ]);
+  const withCaps = buildRecallQueries(["What did Zhenya decide"], {}, false, ["evgenia-ivanova"]);
+  assert.equal(withCaps.find((x) => x.text.startsWith("Zhenya evgenia-ivanova"))?.origin, "cli");
+  assert.deepEqual(buildRecallQueries(["q"], {}, true, ["evgenia-ivanova"]).map((x) => x.text), ["q"]);
+});

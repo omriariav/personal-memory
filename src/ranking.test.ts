@@ -514,6 +514,7 @@ test("DEFAULT_TUNABLES is the measured 'current' profile; IDENTITY_TUNABLES repr
   assert.equal(DEFAULT_TUNABLES.SPREAD_EDGE_FRACTION, 0.3);
   assert.equal(DEFAULT_TUNABLES.CUTOFF_TAU, 0.5);
   assert.equal(DEFAULT_TUNABLES.CUTOFF_MIN_RESULTS, 8);
+  assert.equal(DEFAULT_TUNABLES.ENTITY_LEG_WEIGHT, 2);
 });
 
 test("resolveTunables: MEMORY_RANK_PROFILE=legacy starts from identity; explicit values still override it", () => {
@@ -526,4 +527,50 @@ test("resolveTunables: MEMORY_RANK_PROFILE=legacy starts from identity; explicit
   assert.equal(mixed.CUTOFF_TAU, 0.2);
   assert.equal(mixed.CURRENT_LIFT, 0);
   assert.throws(() => resolveTunables({}, { MEMORY_RANK_PROFILE: "bogus" }), /MEMORY_RANK_PROFILE/);
+});
+
+// --- entity leg --------------------------------------------------------------
+
+test("entity leg: matches form an extra RRF list ordered by match count, then prior score, then date; identity weight 0", () => {
+  const lists: RankList[] = [{ kind: "semantic", query: q("p", 1), ids: ["a"] }];
+  const entityMatches = new Map([
+    ["c", 1],
+    ["b", 2],
+    ["a", 1],
+    ["ghost", 3],
+  ]);
+  assert.equal(IDENTITY_TUNABLES.ENTITY_LEG_WEIGHT, 0);
+  const off = rankCandidates({ rankLists: lists, filtered: ENTRIES, exhaustive: false, k: 5, entityMatches }, NO_RECENCY, NOW);
+  assert.deepEqual(off.hits.map((h) => h.id), ["a"]);
+  assert.equal(off.entityList, undefined);
+
+  const on = rankCandidates(
+    { rankLists: lists, filtered: ENTRIES, exhaustive: false, k: 5, entityMatches },
+    { ...NO_RECENCY, ENTITY_LEG_WEIGHT: 1 },
+    NOW,
+  );
+  assert.deepEqual(on.entityList?.ids, ["b", "a", "c"], "count desc, then prior score (a has one), then date");
+  assert.equal(on.entityList?.kind, "entity");
+  assert.deepEqual(on.hits.map((h) => h.id), ["a", "b", "c"]);
+  const by = Object.fromEntries(on.hits.map((h) => [h.id, h.score]));
+  assert.ok(Math.abs(by.a! - (1 / 61 + 1 / 62)) < 1e-12, `a: ${by.a}`);
+  assert.ok(Math.abs(by.b! - 1 / 61) < 1e-12, `b: ${by.b}`);
+  assert.ok(Math.abs(by.c! - 1 / 63) < 1e-12, `c: ${by.c}`);
+  assert.equal(on.retrievalSignalCount, 3);
+});
+
+test("entity leg: weight scales the list and ENTITY_LIST_MAX caps it", () => {
+  const entityMatches = new Map([
+    ["a", 1],
+    ["b", 1],
+    ["c", 1],
+  ]);
+  const out = rankCandidates(
+    { rankLists: [], filtered: ENTRIES, exhaustive: false, k: 5, entityMatches },
+    { ...NO_RECENCY, ENTITY_LEG_WEIGHT: 0.5, ENTITY_LIST_MAX: 2 },
+    NOW,
+  );
+  // no prior scores: date desc → a (2026-06-01), c (2026-05-31); b (2025) is cut
+  assert.deepEqual(out.entityList?.ids, ["a", "c"]);
+  assert.ok(Math.abs(out.hits[0]!.score - 0.5 / 61) < 1e-12, `weighted: ${out.hits[0]!.score}`);
 });

@@ -132,6 +132,12 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   `add -A`, or `git -C memory commit` manually); template changes are committed
   to the main repo. Pull state (`last_pulled`) lives in
   `.index/connector-state.json`, not in the files.
+- **People profiles:** `memory/people/<slug>.md` (frontmatter only: `slug`,
+  optional `display_name`, `aliases[]`; PRIVATE store only, never scanned as
+  entries). Entries keep slugs; profiles let questions, `--person` and
+  `person <name>` resolve nicknames and display names (`memory people
+  alias|list|show`). A name already owned by another slug is refused — that is
+  a `slugs merge` question, not an alias.
 - **Summaries:** `memory/summaries/<id>.md` (`type: summary`) — an **additive**
   compaction layer with `sources:` back-links. They augment, never replace, raw
   entries. `digest` writes a scaffold; the agent refines the `## Synthesis`

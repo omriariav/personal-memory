@@ -11,6 +11,8 @@ import {
 import type { MemoryEntry } from "./schema.js";
 import type { ChainAnnotation } from "./chains.js";
 import { buildRecallQueries } from "./recall-queries.js";
+import { knownPeople } from "./store.js";
+import { detectPeople, getAliasIndex } from "./people.js";
 
 export { buildRecallQueries };
 
@@ -54,6 +56,7 @@ export interface RecallHit {
   reasons?: {
     semanticRank?: number;
     lexicalRank?: number;
+    entityRank?: number;
     matchedTerms: string[];
     retrievalSignals: string[];
   };
@@ -73,6 +76,10 @@ export interface RecallReport {
   k: number;
   pool: number;
   chunkRows: number;
+  /** Relative score cutoff outcome (never applied on exhaustive runs). */
+  cutoff?: { tau: number; applied: boolean; dropped: number };
+  /** People named in the question, resolved through memory/people/ aliases. */
+  entities?: { people: string[]; ambiguous: string[] };
   warnings: string[];
   hits: RecallHit[];
 }
@@ -82,7 +89,14 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
   const mode = opts.completeness ?? "complete-if-small";
   const k = opts.k ?? 40;
   const completeLimit = opts.completeLimit ?? DEFAULT_COMPLETE_LIMIT;
-  const queries = buildRecallQueries(positionals, filters, Boolean(opts.noExpand));
+  // Nicknames/display names in the question resolve through memory/people/
+  // aliases so "Zhenya" reaches entries filed under her slug. A typed slug (or
+  // its humanized form) already matches lexically and is left alone —
+  // augmenting it boosted every entry about that person and cost exact-title
+  // lookups their first place.
+  const primaryText = positionals[0] ?? "";
+  const people = primaryText.trim() ? detectPeople(primaryText, await getAliasIndex(knownPeople)).aliased : [];
+  const queries = buildRecallQueries(positionals, filters, Boolean(opts.noExpand), people);
   const search = await searchDetailed(queries, filters, k, {
     deep: opts.deep ?? true,
     completeness: mode,
@@ -124,6 +138,8 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
     k: search.report.k,
     pool: search.report.pool,
     chunkRows: search.report.chunkRows,
+    ...(search.report.cutoff ? { cutoff: search.report.cutoff } : {}),
+    ...(search.report.entities ? { entities: search.report.entities } : {}),
     warnings,
     hits: search.hits.map((h) => ({
       id: h.entry.id,

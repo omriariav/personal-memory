@@ -128,7 +128,7 @@ function editDistance(a: string, b: string): number {
   return dp[a.length]![b.length]!;
 }
 
-function similarity(a: string, b: string): number {
+export function similarity(a: string, b: string): number {
   return 1 - editDistance(a, b) / Math.max(a.length, b.length, 1);
 }
 

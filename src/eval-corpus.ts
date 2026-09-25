@@ -9,7 +9,7 @@ import { CASE_KINDS, type CaseKind, type EvalCase } from "./eval.js";
  * (seed 42, total 4000); the extra case families are appended AFTER it so
  * the base output never shifts. Bump GEN_VERSION whenever output changes.
  */
-export const GEN_VERSION = 2; // 2: chain-NN-stale cases (entries unchanged since 1)
+export const GEN_VERSION = 3; // 2: chain-NN-stale cases; 3: memory/people profiles for alias needles (entries unchanged since 1)
 
 export { CASE_KINDS };
 
@@ -242,14 +242,17 @@ export async function generateCorpus(opts: GenOptions): Promise<CorpusManifest> 
       const body = `${a.nick} finished ${a.topic} and handed it over.\n\nFollow-up owner: ${a.nick}.`;
       await writeMd(id, date, { id, date, type: "achievement", title, people: [a.slug], teams: [pick(TEAMS)], tags: [pick(TOPICS)] }, body);
       aliases[a.slug] = [a.nick];
+      // The profile the alias leg reads: memory/people/<slug>.md (frontmatter only).
+      const peopleDir = join(root, "memory", "people");
+      await mkdir(peopleDir, { recursive: true });
+      await writeFile(join(peopleDir, `${a.slug}.md`), `---\nslug: ${a.slug}\naliases:\n  - ${a.nick}\n---\n`, "utf8");
       cases.push({
         id: `alias-${pad2(i)}`,
         kind: "alias",
         query: `what did ${a.nick} work on`,
         expect: [id],
         passAtK: 10,
-        xfail: true,
-        notes: `needs alias ${a.nick} → ${a.slug}; topic ${a.queryTopic} deliberately absent from the query`,
+        notes: `alias ${a.nick} → ${a.slug} via memory/people; topic ${a.queryTopic} deliberately absent from the query`,
       });
     }
   }

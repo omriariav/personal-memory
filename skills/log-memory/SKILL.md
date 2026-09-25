@@ -40,8 +40,12 @@ index files, and the entry paths that CLI output cites.
      `--follows <pending-id>` so the timeline is preserved (see below).
    - `date` — ISO `YYYY-MM-DD`; default to today if not stated.
    - `people` — kebab-case slugs (e.g. `jane-doe`). **Reuse existing slugs** — run
-     `memory list` or check `memory/people/` first so the same person always maps
-     to the same slug.
+     `memory people show "<name as the user said it>"` (resolves nicknames,
+     display names and near-miss slugs through `memory/people/`) or `memory
+     people list` so the same person always maps to the same slug. When the
+     user calls someone by a name recall can't resolve yet, record it once:
+     `memory people alias <slug> --add "<name>"` (frontmatter-only profile in
+     the private store; never a second slug for a known person).
    - `teams`, `tags` — kebab-case slugs (optional but valuable for recall).
 2. **Write a clear body**: what happened, context, decisions, and follow-ups /
    action items. Be concrete (names, numbers, dates) — future recall quality

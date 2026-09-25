@@ -24,6 +24,33 @@ import {
   type TimelineState,
 } from "./ranking.js";
 import { resolveTunables, type RankingTunables } from "./ranking-tunables.js";
+import { detectPeople, getAliasIndex, type Detection } from "./people.js";
+
+/** Person slugs used by any entry — the alias index's implicit vocabulary. */
+export async function knownPeople(): Promise<Set<string>> {
+  const people = new Set<string>();
+  for (const e of await loadAllEntries()) for (const p of e.people) people.add(p);
+  return people;
+}
+
+/**
+ * Entity leg input: how many question people each candidate carries, with
+ * ubiquitous slugs (present in more than ENTITY_MAX_DF of candidates) ignored
+ * so an omnipresent manager or tag never dominates.
+ */
+function entityMatchesFor(slugs: string[], filtered: MemoryEntry[], maxDf: number): Map<string, number> {
+  const matches = new Map<string, number>();
+  if (slugs.length === 0 || filtered.length === 0) return matches;
+  const df = new Map<string, number>();
+  for (const e of filtered) for (const p of e.people) if (slugs.includes(p)) df.set(p, (df.get(p) ?? 0) + 1);
+  const counted = slugs.filter((s) => (df.get(s) ?? 0) / filtered.length <= maxDf);
+  if (counted.length === 0) return matches;
+  for (const e of filtered) {
+    const n = e.people.filter((p) => counted.includes(p)).length;
+    if (n > 0) matches.set(e.id, n);
+  }
+  return matches;
+}
 
 // The pure ranking layer lives in ranking.ts; re-exported so existing
 // importers (cli, server, recall, membership) keep working unchanged.
@@ -245,6 +272,8 @@ export async function indexStatus(): Promise<IndexStatus> {
 export interface SearchHitReason {
   semanticRank?: number;
   lexicalRank?: number;
+  /** Rank in the entity list (entries carrying people named in the question). */
+  entityRank?: number;
   matchedTerms: string[];
   retrievalSignals: string[];
 }
@@ -299,6 +328,8 @@ export interface SearchReport {
   chunkRows: number;
   /** Relative score cutoff outcome (never applied on exhaustive runs). */
   cutoff?: { tau: number; applied: boolean; dropped: number };
+  /** People named in the question (resolved through memory/people/ aliases). */
+  entities?: { people: string[]; ambiguous: string[] };
 }
 
 export interface SearchResult {
@@ -462,7 +493,16 @@ export async function searchDetailed(
     });
   }
   const edges = tunables.SPREAD_EDGE_FRACTION > 0 ? explicitEdges(filtered, filteredIds, chainIndex) : undefined;
-  const ranked = rankCandidates({ rankLists, filtered, exhaustive, k, timeline, edges }, tunables, now);
+  let detection: Detection | undefined;
+  let entityMatches: Map<string, number> | undefined;
+  if (tunables.ENTITY_LEG_WEIGHT > 0) {
+    detection = detectPeople(qs[0]!.text, await getAliasIndex(knownPeople));
+    // Only names that needed an alias to resolve: a typed slug already
+    // matches lexically, and boosting its every entry cost exact-title lookups.
+    entityMatches = entityMatchesFor(detection.aliased, filtered, tunables.ENTITY_MAX_DF);
+  }
+  const ranked = rankCandidates({ rankLists, filtered, exhaustive, k, timeline, edges, entityMatches }, tunables, now);
+  if (ranked.entityList) rankLists.push(ranked.entityList);
   const { retrievalSignalCount, limitedByK } = ranked;
   const consideredCount = exhaustive ? filtered.length : retrievalSignalCount;
   const hits = ranked.hits.map(({ id, score, breakdown, spreadFrom }) => {
@@ -470,9 +510,11 @@ export async function searchDetailed(
     const chain = chainIndex.get(id);
     const semanticRank = bestRank(rankLists, id, "semantic");
     const lexicalRank = bestRank(rankLists, id, "lexical");
+    const entityRank = bestRank(rankLists, id, "entity");
     const retrievalSignals = [
       ...(semanticRank !== undefined ? ["semantic"] : []),
       ...(lexicalRank !== undefined ? ["lexical"] : []),
+      ...(entityRank !== undefined ? ["entity"] : []),
       ...(breakdown.spread > 0 ? ["spread"] : []),
       ...(score === 0 && exhaustive ? ["complete-scan"] : []),
     ];
@@ -485,6 +527,7 @@ export async function searchDetailed(
       reasons: {
         ...(semanticRank !== undefined ? { semanticRank } : {}),
         ...(lexicalRank !== undefined ? { lexicalRank } : {}),
+        ...(entityRank !== undefined ? { entityRank } : {}),
         matchedTerms: matchedTerms(entry, qs),
         retrievalSignals,
       },
@@ -506,6 +549,7 @@ export async function searchDetailed(
       pool,
       chunkRows,
       cutoff: { tau: tunables.CUTOFF_TAU, ...ranked.cutoff },
+      ...(detection ? { entities: { people: detection.slugs, ambiguous: detection.ambiguous } } : {}),
     },
   };
 }

@@ -42,9 +42,11 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8").trim();
 }
 
-function filtersFrom(values: Record<string, unknown>): SearchFilters {
+/** `--person` accepts a slug, a display name, a nickname, or a close slug (see `memory people`). */
+async function filtersFrom(values: Record<string, unknown>): Promise<SearchFilters> {
+  const { resolvePersonArg } = await import("./people-cli.js");
   return {
-    person: (values.person as string) || undefined,
+    person: await resolvePersonArg((values.person as string) || undefined),
     type: (values.type as string) || undefined,
     team: (values.team as string) || undefined,
     tag: (values.tag as string) || undefined,
@@ -540,7 +542,7 @@ async function cmdQuery(argv: string[]) {
   }
   const deep = Boolean(values.deep);
   const k = values.k ? Number(values.k) : deep ? 40 : 8;
-  const hits = await search(queries, filtersFrom(values), k, { deep, noCutoff: Boolean(values["no-cutoff"]) });
+  const hits = await search(queries, await filtersFrom(values), k, { deep, noCutoff: Boolean(values["no-cutoff"]) });
   if (hits.length === 0) {
     console.log("(no matches)");
     return;
@@ -642,7 +644,7 @@ async function cmdRecall(argv: string[]) {
   if (format !== "text" && format !== "json") throw new Error("--format must be one of: text, json");
 
   const report = await recall(queries, {
-    filters: filtersFrom(values),
+    filters: await filtersFrom(values),
     k: positiveInt(values.k, 40, "-k"),
     deep: !values.shallow,
     noExpand: Boolean(values["no-expand"]),
@@ -674,7 +676,7 @@ async function cmdList(argv: string[]) {
   });
   const all = await loadAllEntries();
   const chainIndex = buildChainIndex(all);
-  const entries = applyFilters(all, filtersFrom(values)).sort(
+  const entries = applyFilters(all, await filtersFrom(values)).sort(
     (a, b) => b.date.localeCompare(a.date),
   );
   const limit = values.limit ? Number(values.limit) : entries.length;
@@ -690,8 +692,9 @@ async function cmdPerson(argv: string[]) {
     options: { graph: { type: "string" } },
     allowPositionals: true,
   });
-  const slug = positionals[0];
-  if (!slug || positionals.length !== 1) throw new Error("usage: memory person <slug> [--graph <name>]");
+  const given = positionals[0];
+  if (!given || positionals.length !== 1) throw new Error("usage: memory person <slug-or-name> [--graph <name>]");
+  const slug = (await (await import("./people-cli.js")).resolvePersonArg(given))!;
   const graph = values.graph ? requireGraph(values.graph) : undefined;
   const all = await loadAllEntries();
   const chainIndex = buildChainIndex(all);
@@ -1180,6 +1183,10 @@ Usage:
   memory promote candidates [--to <graph>] [--since DATE] [--until DATE] [--limit N]
             # private entries awaiting promotion review for <graph> (default public)
   memory promote dismiss <id> [--graph <name>] [--reason "…"]   # record "not for that graph" — hidden until content changes
+  memory people alias <slug> --add "Name" [--add "Nick"] [--remove "Name"] [--display "Full Name"] [--create]
+            # nicknames/display names for a person slug (memory/people/<slug>.md, private store only);
+            # questions and --person then resolve "Zhenya" → evgenia-ivanova
+  memory people list [--min-count N] | people show <slug-or-name>
   memory eval add-golden "<query>" ["<agent phrasing>" …] --expect <id,…> [filters] [--must-outrank <winner>:<loser>]… [--absent <id,…>]
             # save a user-confirmed retrieval expectation to the private golden set (memory/eval/golden.json)
   memory eval list | eval remove-golden <id>
@@ -1215,6 +1222,7 @@ async function main() {
     case "connectors": return cmdConnectors(rest);
     case "promote": return cmdPromote(rest);
     case "eval": return (await import("./eval-cli.js")).cmdEval(rest);
+    case "people": return (await import("./people-cli.js")).cmdPeople(rest);
     case "ui": return cmdUi(rest);
     case undefined:
     case "help":

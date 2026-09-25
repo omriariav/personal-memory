@@ -1,33 +1,33 @@
 {
   "meta": {
-    "at": "2026-09-25T13:30:36.927Z",
-    "commit": "5ccaa22",
+    "at": "2026-09-25T13:47:41.964Z",
+    "commit": "3538b06",
     "node": "v20.20.1",
     "embedderId": "local:Xenova/bge-small-en-v1.5",
     "corpus": {
       "size": 4000,
       "seed": 42,
-      "generator": 2,
+      "generator": 3,
       "chunkRows": 4088,
-      "buildMs": 142
+      "buildMs": 109
     },
     "mode": "recall",
     "now": "2026-07-01T00:00:00.000Z"
   },
   "summary": {
     "cases": 142,
-    "passed": 122,
-    "xfailed": 6,
+    "passed": 128,
+    "xfailed": 0,
     "recallAt": {
-      "1": 0.676045271049596,
-      "5": 0.8932742214532872,
-      "10": 0.9108780276816608,
-      "40": 0.9485294117647058
+      "1": 0.6826912455122891,
+      "5": 0.8977837613918807,
+      "10": 0.9146437448218724,
+      "40": 0.9507042253521126
     },
-    "mrr": 0.8255477154146567,
-    "ndcg10": 0.8463805871231771,
+    "mrr": 0.8293978119464318,
+    "ndcg10": 0.8502724619881938,
     "pairPassRate": 1,
-    "meanReturned": 19.154929577464788,
+    "meanReturned": 19.14788732394366,
     "byKind": {
       "needle": {
         "n": 61,
@@ -49,9 +49,9 @@
       },
       "alias": {
         "n": 6,
-        "pass": 5,
-        "recall10": 0.8333333333333334,
-        "mrr": 0.8333333333333334
+        "pass": 6,
+        "recall10": 1,
+        "mrr": 0.9166666666666666
       },
       "chain": {
         "n": 30,
@@ -73,9 +73,9 @@
       }
     },
     "latency": {
-      "p50": 113,
-      "p95": 128,
-      "mean": 114.19718309859155,
+      "p50": 101,
+      "p95": 119,
+      "mean": 100.97887323943662,
       "n": 142
     },
     "failures": [
@@ -96,7 +96,7 @@
         "reciprocalRank": 0.5,
         "ndcg10": 0.6309297535714575,
         "pairs": [],
-        "ms": 128,
+        "ms": 92,
         "pass": false,
         "returned": 22,
         "top": [
@@ -159,7 +159,7 @@
         "reciprocalRank": 0.5,
         "ndcg10": 0.6309297535714575,
         "pairs": [],
-        "ms": 113,
+        "ms": 89,
         "pass": false,
         "returned": 31,
         "top": [
@@ -233,7 +233,7 @@
             "ok": true
           }
         ],
-        "ms": 112,
+        "ms": 89,
         "pass": false,
         "returned": 22,
         "top": [
@@ -307,7 +307,7 @@
             "ok": true
           }
         ],
-        "ms": 106,
+        "ms": 96,
         "pass": false,
         "returned": 31,
         "top": [
@@ -371,7 +371,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": false,
-        "ms": 128,
+        "ms": 104,
         "pass": false,
         "returned": 38,
         "top": [
@@ -435,7 +435,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": false,
-        "ms": 129,
+        "ms": 101,
         "pass": false,
         "returned": 36,
         "top": [
@@ -499,7 +499,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": false,
-        "ms": 126,
+        "ms": 119,
         "pass": false,
         "returned": 37,
         "top": [
@@ -563,7 +563,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": false,
-        "ms": 121,
+        "ms": 98,
         "pass": false,
         "returned": 32,
         "top": [
@@ -627,7 +627,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": false,
-        "ms": 125,
+        "ms": 101,
         "pass": false,
         "returned": 31,
         "top": [
@@ -691,7 +691,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": false,
-        "ms": 123,
+        "ms": 119,
         "pass": false,
         "returned": 27,
         "top": [
@@ -755,7 +755,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": true,
-        "ms": 117,
+        "ms": 96,
         "pass": false,
         "returned": 20,
         "top": [
@@ -819,7 +819,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": false,
-        "ms": 153,
+        "ms": 103,
         "pass": false,
         "returned": 40,
         "top": [
@@ -883,7 +883,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": false,
-        "ms": 116,
+        "ms": 114,
         "pass": false,
         "returned": 21,
         "top": [
@@ -947,7 +947,7 @@
         "ndcg10": 0,
         "pairs": [],
         "lexicalBlind": false,
-        "ms": 122,
+        "ms": 101,
         "pass": false,
         "returned": 13,
         "top": [
@@ -1013,7 +1013,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 127,
+      "ms": 99,
       "pass": true,
       "returned": 20,
       "top": [
@@ -1076,7 +1076,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 126,
+      "ms": 112,
       "pass": true,
       "returned": 21,
       "top": [
@@ -1140,7 +1140,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 119,
+      "ms": 113,
       "pass": true,
       "returned": 1,
       "top": [
@@ -1167,7 +1167,7 @@
       "reciprocalRank": 0.5,
       "ndcg10": 0.6309297535714575,
       "pairs": [],
-      "ms": 128,
+      "ms": 92,
       "pass": false,
       "returned": 22,
       "top": [
@@ -1230,7 +1230,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 137,
+      "ms": 103,
       "pass": true,
       "returned": 21,
       "top": [
@@ -1294,7 +1294,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 121,
+      "ms": 91,
       "pass": true,
       "returned": 1,
       "top": [
@@ -1321,7 +1321,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 112,
+      "ms": 89,
       "pass": true,
       "returned": 21,
       "top": [
@@ -1384,7 +1384,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 120,
+      "ms": 98,
       "pass": true,
       "returned": 20,
       "top": [
@@ -1448,7 +1448,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 110,
+      "ms": 90,
       "pass": true,
       "returned": 1,
       "top": [
@@ -1475,7 +1475,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 117,
+      "ms": 94,
       "pass": true,
       "returned": 21,
       "top": [
@@ -1538,7 +1538,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 121,
+      "ms": 96,
       "pass": true,
       "returned": 20,
       "top": [
@@ -1602,7 +1602,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 124,
+      "ms": 89,
       "pass": true,
       "returned": 1,
       "top": [
@@ -1629,7 +1629,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 113,
+      "ms": 89,
       "pass": true,
       "returned": 21,
       "top": [
@@ -1692,7 +1692,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 119,
+      "ms": 98,
       "pass": true,
       "returned": 20,
       "top": [
@@ -1756,7 +1756,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 109,
+      "ms": 90,
       "pass": true,
       "returned": 1,
       "top": [
@@ -1783,7 +1783,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 119,
+      "ms": 95,
       "pass": true,
       "returned": 28,
       "top": [
@@ -1846,7 +1846,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 117,
+      "ms": 98,
       "pass": true,
       "returned": 20,
       "top": [
@@ -1910,7 +1910,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 106,
+      "ms": 99,
       "pass": true,
       "returned": 1,
       "top": [
@@ -1937,7 +1937,7 @@
       "reciprocalRank": 0.5,
       "ndcg10": 0.6309297535714575,
       "pairs": [],
-      "ms": 113,
+      "ms": 89,
       "pass": false,
       "returned": 31,
       "top": [
@@ -2000,7 +2000,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 117,
+      "ms": 95,
       "pass": true,
       "returned": 21,
       "top": [
@@ -2064,7 +2064,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 110,
+      "ms": 87,
       "pass": true,
       "returned": 1,
       "top": [
@@ -2091,7 +2091,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 107,
+      "ms": 90,
       "pass": true,
       "returned": 22,
       "top": [
@@ -2154,7 +2154,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 109,
+      "ms": 101,
       "pass": true,
       "returned": 21,
       "top": [
@@ -2218,7 +2218,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 104,
+      "ms": 87,
       "pass": true,
       "returned": 1,
       "top": [
@@ -2308,7 +2308,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 116,
+      "ms": 96,
       "pass": true,
       "returned": 21,
       "top": [
@@ -2372,7 +2372,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 110,
+      "ms": 88,
       "pass": true,
       "returned": 1,
       "top": [
@@ -2399,7 +2399,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 114,
+      "ms": 91,
       "pass": true,
       "returned": 27,
       "top": [
@@ -2462,7 +2462,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 119,
+      "ms": 102,
       "pass": true,
       "returned": 20,
       "top": [
@@ -2526,7 +2526,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 112,
+      "ms": 86,
       "pass": true,
       "returned": 1,
       "top": [
@@ -2553,7 +2553,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 107,
+      "ms": 90,
       "pass": true,
       "returned": 21,
       "top": [
@@ -2616,7 +2616,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 116,
+      "ms": 104,
       "pass": true,
       "returned": 21,
       "top": [
@@ -2680,7 +2680,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 105,
+      "ms": 88,
       "pass": true,
       "returned": 1,
       "top": [
@@ -2707,7 +2707,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 113,
+      "ms": 90,
       "pass": true,
       "returned": 20,
       "top": [
@@ -2770,7 +2770,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 113,
+      "ms": 106,
       "pass": true,
       "returned": 20,
       "top": [
@@ -2834,7 +2834,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 104,
+      "ms": 88,
       "pass": true,
       "returned": 1,
       "top": [
@@ -2861,7 +2861,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 115,
+      "ms": 90,
       "pass": true,
       "returned": 20,
       "top": [
@@ -2924,7 +2924,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 112,
+      "ms": 108,
       "pass": true,
       "returned": 20,
       "top": [
@@ -2988,7 +2988,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 107,
+      "ms": 87,
       "pass": true,
       "returned": 1,
       "top": [
@@ -3015,7 +3015,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 117,
+      "ms": 90,
       "pass": true,
       "returned": 20,
       "top": [
@@ -3078,7 +3078,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 114,
+      "ms": 100,
       "pass": true,
       "returned": 20,
       "top": [
@@ -3142,7 +3142,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 105,
+      "ms": 87,
       "pass": true,
       "returned": 1,
       "top": [
@@ -3169,7 +3169,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 115,
+      "ms": 90,
       "pass": true,
       "returned": 21,
       "top": [
@@ -3232,7 +3232,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 118,
+      "ms": 102,
       "pass": true,
       "returned": 21,
       "top": [
@@ -3296,7 +3296,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 109,
+      "ms": 87,
       "pass": true,
       "returned": 1,
       "top": [
@@ -3323,7 +3323,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 115,
+      "ms": 89,
       "pass": true,
       "returned": 20,
       "top": [
@@ -3386,7 +3386,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 115,
+      "ms": 104,
       "pass": true,
       "returned": 21,
       "top": [
@@ -3450,7 +3450,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 109,
+      "ms": 86,
       "pass": true,
       "returned": 1,
       "top": [
@@ -3477,7 +3477,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 113,
+      "ms": 89,
       "pass": true,
       "returned": 20,
       "top": [
@@ -3540,7 +3540,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 114,
+      "ms": 103,
       "pass": true,
       "returned": 21,
       "top": [
@@ -3604,7 +3604,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 111,
+      "ms": 88,
       "pass": true,
       "returned": 1,
       "top": [
@@ -3631,7 +3631,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 115,
+      "ms": 91,
       "pass": true,
       "returned": 21,
       "top": [
@@ -3694,7 +3694,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 117,
+      "ms": 102,
       "pass": true,
       "returned": 21,
       "top": [
@@ -3758,7 +3758,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 111,
+      "ms": 87,
       "pass": true,
       "returned": 1,
       "top": [
@@ -3785,7 +3785,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 116,
+      "ms": 89,
       "pass": true,
       "returned": 20,
       "top": [
@@ -3848,7 +3848,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 118,
+      "ms": 105,
       "pass": true,
       "returned": 21,
       "top": [
@@ -3912,7 +3912,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 110,
+      "ms": 87,
       "pass": true,
       "returned": 1,
       "top": [
@@ -3939,7 +3939,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 113,
+      "ms": 91,
       "pass": true,
       "returned": 20,
       "top": [
@@ -4002,7 +4002,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 115,
+      "ms": 101,
       "pass": true,
       "returned": 20,
       "top": [
@@ -4066,7 +4066,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 104,
+      "ms": 87,
       "pass": true,
       "returned": 1,
       "top": [
@@ -4113,7 +4113,7 @@
       "ndcg10": 0.7909506325094737,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 107,
+      "ms": 90,
       "pass": true,
       "returned": 40,
       "top": [
@@ -4187,7 +4187,7 @@
           "ok": true
         }
       ],
-      "ms": 115,
+      "ms": 96,
       "pass": true,
       "returned": 20,
       "top": [
@@ -4261,7 +4261,7 @@
           "ok": true
         }
       ],
-      "ms": 112,
+      "ms": 89,
       "pass": false,
       "returned": 22,
       "top": [
@@ -4335,7 +4335,7 @@
           "ok": true
         }
       ],
-      "ms": 117,
+      "ms": 89,
       "pass": true,
       "returned": 21,
       "top": [
@@ -4409,7 +4409,7 @@
           "ok": true
         }
       ],
-      "ms": 111,
+      "ms": 96,
       "pass": true,
       "returned": 21,
       "top": [
@@ -4483,7 +4483,7 @@
           "ok": true
         }
       ],
-      "ms": 108,
+      "ms": 89,
       "pass": true,
       "returned": 21,
       "top": [
@@ -4557,7 +4557,7 @@
           "ok": true
         }
       ],
-      "ms": 109,
+      "ms": 90,
       "pass": true,
       "returned": 28,
       "top": [
@@ -4631,7 +4631,7 @@
           "ok": true
         }
       ],
-      "ms": 106,
+      "ms": 96,
       "pass": false,
       "returned": 31,
       "top": [
@@ -4705,7 +4705,7 @@
           "ok": true
         }
       ],
-      "ms": 110,
+      "ms": 89,
       "pass": true,
       "returned": 22,
       "top": [
@@ -4779,7 +4779,7 @@
           "ok": true
         }
       ],
-      "ms": 117,
+      "ms": 88,
       "pass": true,
       "returned": 25,
       "top": [
@@ -4853,7 +4853,7 @@
           "ok": true
         }
       ],
-      "ms": 109,
+      "ms": 93,
       "pass": true,
       "returned": 27,
       "top": [
@@ -4917,7 +4917,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 128,
+      "ms": 104,
       "pass": false,
       "returned": 38,
       "top": [
@@ -4981,7 +4981,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 129,
+      "ms": 101,
       "pass": false,
       "returned": 36,
       "top": [
@@ -5045,7 +5045,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 126,
+      "ms": 119,
       "pass": false,
       "returned": 37,
       "top": [
@@ -5109,7 +5109,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 121,
+      "ms": 98,
       "pass": false,
       "returned": 32,
       "top": [
@@ -5173,7 +5173,7 @@
       "ndcg10": 0.2890648263178879,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 148,
+      "ms": 106,
       "pass": true,
       "returned": 40,
       "top": [
@@ -5237,7 +5237,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 125,
+      "ms": 101,
       "pass": false,
       "returned": 31,
       "top": [
@@ -5301,7 +5301,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 123,
+      "ms": 119,
       "pass": false,
       "returned": 27,
       "top": [
@@ -5365,7 +5365,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": true,
-      "ms": 117,
+      "ms": 96,
       "pass": false,
       "returned": 20,
       "top": [
@@ -5429,7 +5429,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 153,
+      "ms": 103,
       "pass": false,
       "returned": 40,
       "top": [
@@ -5493,7 +5493,7 @@
       "ndcg10": 0.3010299956639812,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 125,
+      "ms": 102,
       "pass": true,
       "returned": 40,
       "top": [
@@ -5557,7 +5557,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 116,
+      "ms": 114,
       "pass": false,
       "returned": 21,
       "top": [
@@ -5621,7 +5621,7 @@
       "ndcg10": 0,
       "pairs": [],
       "lexicalBlind": false,
-      "ms": 122,
+      "ms": 101,
       "pass": false,
       "returned": 13,
       "top": [
@@ -5670,7 +5670,7 @@
     {
       "id": "alias-00",
       "kind": "alias",
-      "xfail": true,
+      "xfail": false,
       "ranks": {
         "2025-05-29-alias-00": 1
       },
@@ -5684,56 +5684,48 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 154,
+      "ms": 137,
       "pass": true,
-      "returned": 10,
+      "returned": 8,
       "top": [
         {
           "id": "2025-05-29-alias-00",
-          "score": 0.12580547682849916
-        },
-        {
-          "id": "2024-06-05-microservice-blocked-with-hila-mizrahi-1242",
-          "score": 0.0885592047277727
-        },
-        {
-          "id": "2024-12-14-microservice-blocked-with-lior-mizrahi-1942",
-          "score": 0.07756788027771055
+          "score": 0.2895235892117392
         },
         {
           "id": "2024-02-09-microservice-discussed-with-ana-mizrahi-0809",
-          "score": 0.07650663331002075
+          "score": 0.1126376146934675
         },
         {
-          "id": "2024-02-10-experiment-blocked-with-uri-mizrahi-0817",
-          "score": 0.07457633535580832
-        },
-        {
-          "id": "2024-03-16-vendor-shipped-with-shay-mizrahi-0940",
-          "score": 0.0724043670133971
-        },
-        {
-          "id": "2024-07-14-needle-07-dup-quoll",
-          "score": 0.07055052757896732
+          "id": "2026-03-16-migration-blocked-with-ana-peretz-3612",
+          "score": 0.09363721796888333
         },
         {
           "id": "2025-03-08-gateway-discussed-with-dana-mizrahi-2250",
-          "score": 0.07053935627747909
+          "score": 0.08823553200493006
         },
         {
           "id": "2023-11-08-monolith-blocked-with-boris-mizrahi-0475",
-          "score": 0.06374186507402191
+          "score": 0.08573862791392303
         },
         {
-          "id": "2026-04-22-forecast-blocked-with-dana-mizrahi-3741",
-          "score": 0.06319880218958908
+          "id": "2024-12-14-microservice-blocked-with-lior-mizrahi-1942",
+          "score": 0.08017449554028687
+        },
+        {
+          "id": "2025-01-23-refactor-discussed-with-boris-mizrahi-2083",
+          "score": 0.07744297119244621
+        },
+        {
+          "id": "2024-02-10-experiment-blocked-with-uri-mizrahi-0817",
+          "score": 0.0771557753625666
         }
       ]
     },
     {
       "id": "alias-01",
       "kind": "alias",
-      "xfail": true,
+      "xfail": false,
       "ranks": {
         "2025-04-05-alias-01": 1
       },
@@ -5747,48 +5739,48 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 129,
+      "ms": 135,
       "pass": true,
       "returned": 8,
       "top": [
         {
           "id": "2025-04-05-alias-01",
-          "score": 0.17229142646764947
-        },
-        {
-          "id": "2023-10-26-reorg-escalated-with-shay-mizrahi-0424",
-          "score": 0.10280317350868921
-        },
-        {
-          "id": "2024-11-14-monolith-escalated-with-rina-cohen-1830",
-          "score": 0.08669252770934013
-        },
-        {
-          "id": "2024-02-24-slo-escalated-with-karin-levi-0864",
-          "score": 0.08655362801253635
+          "score": 0.32717726174705514
         },
         {
           "id": "2023-11-23-postmortem-escalated-with-shay-mizrahi-0520",
-          "score": 0.08539710469263229
+          "score": 0.09340562204460941
         },
         {
-          "id": "2025-03-08-gateway-discussed-with-dana-mizrahi-2250",
-          "score": 0.08334793866601714
+          "id": "2023-10-26-reorg-escalated-with-shay-mizrahi-0424",
+          "score": 0.09338365428368156
         },
         {
           "id": "2025-07-11-slo-reviewed-with-shay-cohen-2701",
-          "score": 0.07859313966959344
+          "score": 0.09255092353361198
         },
         {
-          "id": "2023-08-08-microservice-discussed-with-shay-cohen-0135",
-          "score": 0.0782964413271764
+          "id": "2025-03-08-gateway-discussed-with-dana-mizrahi-2250",
+          "score": 0.08793187404834817
+        },
+        {
+          "id": "2024-03-16-vendor-shipped-with-shay-mizrahi-0940",
+          "score": 0.0867403683113302
+        },
+        {
+          "id": "2025-01-23-refactor-discussed-with-boris-mizrahi-2083",
+          "score": 0.08198261847441232
+        },
+        {
+          "id": "2023-12-19-airflow-escalated-with-karin-cohen-0617",
+          "score": 0.08068940210609502
         }
       ]
     },
     {
       "id": "alias-02",
       "kind": "alias",
-      "xfail": true,
+      "xfail": false,
       "ranks": {
         "2023-09-20-alias-02": 1
       },
@@ -5802,111 +5794,111 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 125,
+      "ms": 138,
       "pass": true,
       "returned": 8,
       "top": [
         {
           "id": "2023-09-20-alias-02",
-          "score": 0.16236582072683786
-        },
-        {
-          "id": "2024-09-29-rollout-measured-with-ana-cohen-1658",
-          "score": 0.11153780700365672
+          "score": 0.319797317991464
         },
         {
           "id": "2024-12-19-microservice-escalated-with-dana-levi-1955",
-          "score": 0.10607602223297524
+          "score": 0.14427465248982616
+        },
+        {
+          "id": "2024-09-29-rollout-measured-with-ana-cohen-1658",
+          "score": 0.13226541799497743
         },
         {
           "id": "2025-02-13-dashboard-discussed-with-ido-levi-2161",
-          "score": 0.10037115917949652
+          "score": 0.10983127049325972
+        },
+        {
+          "id": "2026-02-08-kafka-reviewed-with-ana-levi-3483",
+          "score": 0.10009858468109568
         },
         {
           "id": "2023-08-19-okr-escalated-with-dana-levi-0174",
-          "score": 0.09746265738089795
-        },
-        {
-          "id": "2024-11-14-monolith-escalated-with-rina-cohen-1830",
-          "score": 0.08886248448164573
-        },
-        {
-          "id": "2024-09-06-cache-planned-with-rina-levi-1582",
-          "score": 0.08865686136848734
+          "score": 0.09699373449306321
         },
         {
           "id": "2024-02-20-kafka-discussed-with-ido-levi-0853",
-          "score": 0.07718109571398041
+          "score": 0.0905394321980245
+        },
+        {
+          "id": "2024-12-19-payout-measured-with-rina-peretz-1965",
+          "score": 0.08863132573873268
         }
       ]
     },
     {
       "id": "alias-03",
       "kind": "alias",
-      "xfail": true,
+      "xfail": false,
       "ranks": {
-        "2024-03-22-alias-03": null
+        "2024-03-22-alias-03": 2
       },
-      "firstRelevantRank": null,
+      "firstRelevantRank": 2,
       "recallAt": {
         "1": 0,
-        "5": 0,
-        "10": 0,
-        "40": 0
+        "5": 1,
+        "10": 1,
+        "40": 1
       },
-      "reciprocalRank": 0,
-      "ndcg10": 0,
+      "reciprocalRank": 0.5,
+      "ndcg10": 0.6309297535714575,
       "pairs": [],
-      "ms": 116,
-      "pass": false,
-      "returned": 33,
+      "ms": 118,
+      "pass": true,
+      "returned": 34,
       "top": [
         {
           "id": "2025-01-13-billing-approved-with-rina-peretz-2047",
-          "score": 0.20230009715020775
+          "score": 0.2172082639329753
         },
         {
-          "id": "2023-09-12-billing-discussed-with-eli-mizrahi-0270",
-          "score": 0.15635073731077084
+          "id": "2024-03-22-alias-03",
+          "score": 0.17340401857788657
         },
         {
           "id": "2025-01-20-billing-escalated-with-ana-biton-2071",
-          "score": 0.14930389898016375
-        },
-        {
-          "id": "2024-02-10-billing-discussed-with-dana-cohen-0813",
-          "score": 0.14244460305264028
-        },
-        {
-          "id": "2026-04-11-billing-planned-with-eli-cohen-3703",
-          "score": 0.13951948366144046
-        },
-        {
-          "id": "2024-11-04-billing-discussed-with-pini-cohen-1792",
-          "score": 0.13657456038351878
-        },
-        {
-          "id": "2024-11-24-billing-escalated-with-gil-biton-1870",
-          "score": 0.1364577529787393
-        },
-        {
-          "id": "2026-06-16-billing-escalated-with-eli-biton-3946",
-          "score": 0.13623611691074308
+          "score": 0.1725580649988952
         },
         {
           "id": "2026-05-03-billing-planned-with-pini-cohen-3790",
-          "score": 0.13441103564134282
+          "score": 0.17040919325823967
+        },
+        {
+          "id": "2024-02-10-billing-discussed-with-dana-cohen-0813",
+          "score": 0.16268154341248464
+        },
+        {
+          "id": "2024-12-12-billing-measured-with-tomer-cohen-1935",
+          "score": 0.1624603318848599
+        },
+        {
+          "id": "2023-09-12-billing-discussed-with-eli-mizrahi-0270",
+          "score": 0.15518555350376823
         },
         {
           "id": "2025-10-16-billing-blocked-with-maya-biton-3058",
-          "score": 0.1342298161052509
+          "score": 0.15399325023072238
+        },
+        {
+          "id": "2026-04-11-billing-planned-with-eli-cohen-3703",
+          "score": 0.1488834400121595
+        },
+        {
+          "id": "2026-02-19-billing-unblocked-with-dana-cohen-3516",
+          "score": 0.14426394875837825
         }
       ]
     },
     {
       "id": "alias-04",
       "kind": "alias",
-      "xfail": true,
+      "xfail": false,
       "ranks": {
         "2024-07-14-alias-04": 1
       },
@@ -5920,48 +5912,48 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 117,
+      "ms": 114,
       "pass": true,
       "returned": 8,
       "top": [
         {
           "id": "2024-07-14-alias-04",
-          "score": 0.19627632309089157
+          "score": 0.3486583324872245
         },
         {
           "id": "2026-03-04-migration-escalated-with-ana-cohen-3559",
-          "score": 0.104630441465667
-        },
-        {
-          "id": "2023-08-08-microservice-discussed-with-shay-cohen-0135",
-          "score": 0.0856814898710288
-        },
-        {
-          "id": "2025-03-08-gateway-discussed-with-dana-mizrahi-2250",
-          "score": 0.08277796526475352
+          "score": 0.14649494338444122
         },
         {
           "id": "2025-11-22-gateway-discussed-with-rina-cohen-3191",
-          "score": 0.0811687824506517
+          "score": 0.11711848946904084
+        },
+        {
+          "id": "2025-03-08-gateway-discussed-with-dana-mizrahi-2250",
+          "score": 0.1160564396147494
+        },
+        {
+          "id": "2023-08-08-microservice-discussed-with-shay-cohen-0135",
+          "score": 0.09021047608892889
+        },
+        {
+          "id": "2023-12-06-oncall-shipped-with-chen-cohen-0571",
+          "score": 0.08752651863200839
+        },
+        {
+          "id": "2024-12-19-microservice-escalated-with-dana-levi-1955",
+          "score": 0.08299273144516862
         },
         {
           "id": "2025-06-04-oncall-discussed-with-pini-mizrahi-2570",
-          "score": 0.08064270573405527
-        },
-        {
-          "id": "2023-09-07-hiring-reviewed-with-shay-levi-0244",
-          "score": 0.07626794149734625
-        },
-        {
-          "id": "2025-12-21-reorg-discussed-with-maya-peretz-3303",
-          "score": 0.07421049172495625
+          "score": 0.08298705738906514
         }
       ]
     },
     {
       "id": "alias-05",
       "kind": "alias",
-      "xfail": true,
+      "xfail": false,
       "ranks": {
         "2025-05-21-alias-05": 1
       },
@@ -5975,41 +5967,41 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 117,
+      "ms": 115,
       "pass": true,
       "returned": 8,
       "top": [
         {
           "id": "2025-05-21-alias-05",
-          "score": 0.23338460248343876
+          "score": 0.38579903675833754
         },
         {
           "id": "2023-08-19-okr-escalated-with-dana-levi-0174",
-          "score": 0.09437824124957923
+          "score": 0.11775486877115267
         },
         {
           "id": "2025-02-13-dashboard-discussed-with-ido-levi-2161",
-          "score": 0.09314664002468628
-        },
-        {
-          "id": "2023-08-29-serving-discussed-with-jon-biton-0209",
-          "score": 0.08916701319130232
+          "score": 0.08751558831520406
         },
         {
           "id": "2024-02-20-kafka-discussed-with-ido-levi-0853",
-          "score": 0.08446493246602008
+          "score": 0.0849606695307109
         },
         {
-          "id": "2026-02-20-cache-escalated-with-jon-cohen-3524",
-          "score": 0.08174001889357847
+          "id": "2025-09-28-kafka-planned-with-jon-peretz-2990",
+          "score": 0.08169619719113975
         },
         {
-          "id": "2026-04-10-paraphrase-02",
-          "score": 0.07870184494158909
+          "id": "2023-08-29-serving-discussed-with-jon-biton-0209",
+          "score": 0.08059751996784016
+        },
+        {
+          "id": "2023-12-19-airflow-escalated-with-karin-cohen-0617",
+          "score": 0.07996966305602207
         },
         {
           "id": "2025-01-23-refactor-discussed-with-boris-mizrahi-2083",
-          "score": 0.07518596007943014
+          "score": 0.07775723984514993
         }
       ]
     },
@@ -6043,7 +6035,7 @@
           "ok": true
         }
       ],
-      "ms": 123,
+      "ms": 108,
       "pass": true,
       "returned": 25,
       "top": [
@@ -6107,7 +6099,7 @@
       "ndcg10": 0.6309297535714575,
       "pairs": [],
       "chainOk": true,
-      "ms": 107,
+      "ms": 103,
       "pass": true,
       "returned": 24,
       "top": [
@@ -6177,7 +6169,7 @@
           "ok": true
         }
       ],
-      "ms": 113,
+      "ms": 128,
       "pass": true,
       "returned": 28,
       "top": [
@@ -6253,7 +6245,7 @@
           "ok": true
         }
       ],
-      "ms": 103,
+      "ms": 102,
       "pass": true,
       "returned": 26,
       "top": [
@@ -6317,7 +6309,7 @@
       "ndcg10": 0.6309297535714575,
       "pairs": [],
       "chainOk": true,
-      "ms": 115,
+      "ms": 104,
       "pass": true,
       "returned": 26,
       "top": [
@@ -6387,7 +6379,7 @@
           "ok": true
         }
       ],
-      "ms": 115,
+      "ms": 111,
       "pass": true,
       "returned": 27,
       "top": [
@@ -6463,7 +6455,7 @@
           "ok": true
         }
       ],
-      "ms": 121,
+      "ms": 119,
       "pass": true,
       "returned": 25,
       "top": [
@@ -6597,7 +6589,7 @@
           "ok": true
         }
       ],
-      "ms": 113,
+      "ms": 107,
       "pass": true,
       "returned": 28,
       "top": [
@@ -6673,7 +6665,7 @@
           "ok": true
         }
       ],
-      "ms": 103,
+      "ms": 101,
       "pass": true,
       "returned": 26,
       "top": [
@@ -6737,7 +6729,7 @@
       "ndcg10": 0.6309297535714575,
       "pairs": [],
       "chainOk": true,
-      "ms": 123,
+      "ms": 111,
       "pass": true,
       "returned": 26,
       "top": [
@@ -6807,7 +6799,7 @@
           "ok": true
         }
       ],
-      "ms": 111,
+      "ms": 109,
       "pass": true,
       "returned": 28,
       "top": [
@@ -6883,7 +6875,7 @@
           "ok": true
         }
       ],
-      "ms": 103,
+      "ms": 100,
       "pass": true,
       "returned": 24,
       "top": [
@@ -6947,7 +6939,7 @@
       "ndcg10": 0.6309297535714575,
       "pairs": [],
       "chainOk": true,
-      "ms": 106,
+      "ms": 118,
       "pass": true,
       "returned": 26,
       "top": [
@@ -7017,7 +7009,7 @@
           "ok": true
         }
       ],
-      "ms": 128,
+      "ms": 110,
       "pass": true,
       "returned": 29,
       "top": [
@@ -7093,7 +7085,7 @@
           "ok": true
         }
       ],
-      "ms": 104,
+      "ms": 100,
       "pass": true,
       "returned": 25,
       "top": [
@@ -7157,7 +7149,7 @@
       "ndcg10": 0.6309297535714575,
       "pairs": [],
       "chainOk": true,
-      "ms": 105,
+      "ms": 102,
       "pass": true,
       "returned": 28,
       "top": [
@@ -7227,7 +7219,7 @@
           "ok": true
         }
       ],
-      "ms": 113,
+      "ms": 115,
       "pass": true,
       "returned": 29,
       "top": [
@@ -7303,7 +7295,7 @@
           "ok": true
         }
       ],
-      "ms": 121,
+      "ms": 101,
       "pass": true,
       "returned": 24,
       "top": [
@@ -7367,7 +7359,7 @@
       "ndcg10": 0.6309297535714575,
       "pairs": [],
       "chainOk": true,
-      "ms": 104,
+      "ms": 103,
       "pass": true,
       "returned": 26,
       "top": [
@@ -7437,7 +7429,7 @@
           "ok": true
         }
       ],
-      "ms": 113,
+      "ms": 126,
       "pass": true,
       "returned": 29,
       "top": [
@@ -7513,7 +7505,7 @@
           "ok": true
         }
       ],
-      "ms": 103,
+      "ms": 104,
       "pass": true,
       "returned": 24,
       "top": [
@@ -7577,7 +7569,7 @@
       "ndcg10": 0.6309297535714575,
       "pairs": [],
       "chainOk": true,
-      "ms": 124,
+      "ms": 102,
       "pass": true,
       "returned": 27,
       "top": [
@@ -7647,7 +7639,7 @@
           "ok": true
         }
       ],
-      "ms": 116,
+      "ms": 109,
       "pass": true,
       "returned": 30,
       "top": [
@@ -7723,7 +7715,7 @@
           "ok": true
         }
       ],
-      "ms": 116,
+      "ms": 117,
       "pass": true,
       "returned": 26,
       "top": [
@@ -7787,7 +7779,7 @@
       "ndcg10": 0.6309297535714575,
       "pairs": [],
       "chainOk": true,
-      "ms": 116,
+      "ms": 103,
       "pass": true,
       "returned": 28,
       "top": [
@@ -7857,7 +7849,7 @@
           "ok": true
         }
       ],
-      "ms": 133,
+      "ms": 110,
       "pass": true,
       "returned": 23,
       "top": [
@@ -7933,7 +7925,7 @@
           "ok": true
         }
       ],
-      "ms": 106,
+      "ms": 100,
       "pass": true,
       "returned": 26,
       "top": [
@@ -7997,7 +7989,7 @@
       "ndcg10": 0.6309297535714575,
       "pairs": [],
       "chainOk": true,
-      "ms": 110,
+      "ms": 107,
       "pass": true,
       "returned": 28,
       "top": [
@@ -8067,7 +8059,7 @@
           "ok": true
         }
       ],
-      "ms": 116,
+      "ms": 111,
       "pass": true,
       "returned": 26,
       "top": [
@@ -8147,7 +8139,7 @@
       "ndcg10": 0.8611375561264454,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 112,
+      "ms": 91,
       "pass": true,
       "returned": 18,
       "top": [
@@ -8211,7 +8203,7 @@
       "ndcg10": 1,
       "pairs": [],
       "exhaustiveOk": true,
-      "ms": 97,
+      "ms": 93,
       "pass": true,
       "returned": 8,
       "top": [
@@ -8286,7 +8278,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 106,
+      "ms": 105,
       "pass": true,
       "returned": 11,
       "top": [
@@ -8349,7 +8341,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 113,
+      "ms": 118,
       "pass": true,
       "returned": 11,
       "top": [
@@ -8412,7 +8404,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 118,
+      "ms": 102,
       "pass": true,
       "returned": 13,
       "top": [
@@ -8475,7 +8467,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 103,
+      "ms": 100,
       "pass": true,
       "returned": 11,
       "top": [
@@ -8538,7 +8530,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 124,
+      "ms": 117,
       "pass": true,
       "returned": 16,
       "top": [
@@ -8601,7 +8593,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 102,
+      "ms": 131,
       "pass": true,
       "returned": 22,
       "top": [
@@ -8727,7 +8719,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 106,
+      "ms": 102,
       "pass": true,
       "returned": 17,
       "top": [
@@ -8790,7 +8782,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 121,
+      "ms": 105,
       "pass": true,
       "returned": 15,
       "top": [
@@ -8853,7 +8845,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 111,
+      "ms": 119,
       "pass": true,
       "returned": 15,
       "top": [
@@ -8916,7 +8908,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 108,
+      "ms": 101,
       "pass": true,
       "returned": 16,
       "top": [
@@ -8979,7 +8971,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 105,
+      "ms": 103,
       "pass": true,
       "returned": 16,
       "top": [
@@ -9042,7 +9034,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 127,
+      "ms": 101,
       "pass": true,
       "returned": 21,
       "top": [
@@ -9105,7 +9097,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 102,
+      "ms": 120,
       "pass": true,
       "returned": 16,
       "top": [
@@ -9168,7 +9160,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 106,
+      "ms": 104,
       "pass": true,
       "returned": 14,
       "top": [
@@ -9231,7 +9223,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 105,
+      "ms": 108,
       "pass": true,
       "returned": 16,
       "top": [
@@ -9294,7 +9286,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 120,
+      "ms": 103,
       "pass": true,
       "returned": 15,
       "top": [
@@ -9357,7 +9349,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 102,
+      "ms": 110,
       "pass": true,
       "returned": 14,
       "top": [
@@ -9483,7 +9475,7 @@
       "reciprocalRank": 1,
       "ndcg10": 1,
       "pairs": [],
-      "ms": 108,
+      "ms": 104,
       "pass": true,
       "returned": 16,
       "top": [

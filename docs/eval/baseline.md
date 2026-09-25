@@ -1,23 +1,23 @@
 # Retrieval evaluation baseline
 
-- recorded: 2026-09-25T13:30:36.927Z
-- commit: 5ccaa22
+- recorded: 2026-09-25T13:47:41.964Z
+- commit: 3538b06
 - node: v20.20.1
 - embedder: local:Xenova/bge-small-en-v1.5
-- corpus: synthetic · 4000 entries · seed 42 · generator 2 · 4088 chunk rows · built in 0 s
+- corpus: synthetic · 4000 entries · seed 42 · generator 3 · 4088 chunk rows · built in 0 s
 - mode: recall · fixed clock 2026-07-01T00:00:00.000Z
 
 ## Summary
 
 | metric | value |
 |---|---|
-| cases | 142 (gated 136, xfail 6) |
-| passed | 122 |
-| recall@1 / @5 / @10 / @40 | 67.6% / 89.3% / 91.1% / 94.9% |
-| MRR | 0.8255 |
-| nDCG@10 | 0.8464 |
+| cases | 142 (gated 142, xfail 0) |
+| passed | 128 |
+| recall@1 / @5 / @10 / @40 | 68.3% / 89.8% / 91.5% / 95.1% |
+| MRR | 0.8294 |
+| nDCG@10 | 0.8503 |
 | pair pass rate | 100.0% |
-| latency p50 / p95 / mean | 113 / 128 / 114 ms |
+| latency p50 / p95 / mean | 101 / 119 / 101 ms |
 
 ## By kind
 
@@ -26,7 +26,7 @@
 | needle | 61 | 59 | 98.9% | 0.984 |
 | dup | 10 | 8 | 100.0% | 0.900 |
 | paraphrase | 12 | 2 | 16.7% | 0.037 |
-| alias | 6 | 5 | 83.3% | 0.833 |
+| alias | 6 | 6 | 100.0% | 0.917 |
 | chain | 30 | 30 | 100.0% | 0.694 |
 | filter | 3 | 3 | 51.0% | 0.667 |
 | title | 20 | 20 | 100.0% | 1.000 |

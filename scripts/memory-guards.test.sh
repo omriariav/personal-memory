@@ -152,6 +152,10 @@ write_bash_case deny  'echo "{}" > memory/eval/golden.json'
 write_bash_case deny  'cp golden.json memory/eval/golden.json'
 write_bash_case allow 'npx tsx src/cli.ts eval add-golden "where did we land" --expect 2026-01-01-x'
 write_bash_case allow 'npx tsx src/cli.ts eval run --compare'
+# people profiles are private config, like connectors: editable, never entries
+write_file_case allow 'memory/people/jane-doe.md'
+write_bash_case allow 'npx tsx src/cli.ts people alias jane-doe --add "Jane"'
+bash_case deny 'cat memory/people/jane-doe.md'
 
 echo
 echo "== guards must fail CLOSED without jq (sandboxed/mounted VM images) =="

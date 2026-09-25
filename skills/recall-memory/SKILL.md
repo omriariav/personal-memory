@@ -79,6 +79,18 @@ the top cited entry file(s) in full, then answer with citations (file paths).
 If a hit is a `summary` entry, its output includes a `sources:` line — pull the
 raw entries it cites when you need specifics behind the rollup.
 
+**Names resolve through people profiles.** Write names the way the user says
+them: "Zhenya", "Jane Doe", or a slug all reach the same person once
+`memory/people/<slug>.md` lists the nickname (the JSON report's `entities`
+field shows what resolved; `ambiguous` lists names shared by two people — ask
+or pass `--person <slug>`). `--person` and `person <…>` accept a name or a
+close slug too. When the user refers to someone by a name recall cannot
+resolve, add it once:
+
+```bash
+npx tsx src/cli.ts people alias evgenia-ivanova --add "Zhenya"     # people list / people show <name> to look around
+```
+
 ### ⏱ Timeline annotations — never answer from a stale chain member
 
 Entries can be chained with `follows` links (note → pending-decision →

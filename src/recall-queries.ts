@@ -93,7 +93,17 @@ function pushQuery(out: QuerySpec[], seen: Set<string>, text: string, origin: Qu
   out.push({ text: normalized, origin, weight: ORIGIN_WEIGHTS[origin] });
 }
 
-export function buildRecallQueries(positionals: string[], filters: SearchFilters = {}, noExpand = false): QuerySpec[] {
+/**
+ * @param resolvedPeople person slugs found in the question through the alias
+ *   index (nicknames, display names); appended to the entity phrasing as the
+ *   slug and its humanized form so both legs can match the entry's metadata.
+ */
+export function buildRecallQueries(
+  positionals: string[],
+  filters: SearchFilters = {},
+  noExpand = false,
+  resolvedPeople: string[] = [],
+): QuerySpec[] {
   const primary = normalizeSpace(positionals[0] ?? "");
   if (!primary) return [];
 
@@ -104,10 +114,11 @@ export function buildRecallQueries(positionals: string[], filters: SearchFilters
 
   if (!noExpand) {
     const keywords = keywordPhrase(primary);
-    const entities = entityPhrase(primary);
+    const people = [...new Set(resolvedPeople.flatMap((s) => [s, s.replace(/-+/g, " ")]))].join(" ");
+    const entities = normalizeSpace(`${entityPhrase(primary)} ${people}`);
     pushQuery(out, seen, keywords, "cli");
     pushQuery(out, seen, entities, "cli");
-    pushQuery(out, seen, filterPhrase(filters, keywords || entities), "cli");
+    pushQuery(out, seen, filterPhrase(filters, normalizeSpace(`${keywords} ${people}`) || entities), "cli");
   }
 
   return out;
