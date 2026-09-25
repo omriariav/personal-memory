@@ -4,6 +4,7 @@ import {
   applyFilters,
   bestRank,
   candidatePool,
+  digestAnnotations,
   rankCandidates,
   rankToRRF,
   recencyMultiplier,
@@ -573,4 +574,23 @@ test("entity leg: weight scales the list and ENTITY_LIST_MAX caps it", () => {
   // no prior scores: date desc → a (2026-06-01), c (2026-05-31); b (2025) is cut
   assert.deepEqual(out.entityList?.ids, ["a", "c"]);
   assert.ok(Math.abs(out.hits[0]!.score - 0.5 / 61) < 1e-12, `weighted: ${out.hits[0]!.score}`);
+});
+
+// --- digest annotations ------------------------------------------------------
+
+test("digestAnnotations: a summary hit lists which of its sources were also returned; those raw hits point back at it", () => {
+  const hits = [
+    { id: "summary-q3", sources: ["a", "b", "z"] },
+    { id: "a" },
+    { id: "b", sources: [] },
+    { id: "c" },
+    { id: "summary-jane", sources: ["a"] },
+  ];
+  const ann = digestAnnotations(hits);
+  assert.deepEqual(ann.get("summary-q3"), { digestOf: ["a", "b"] });
+  assert.deepEqual(ann.get("summary-jane"), { digestOf: ["a"] });
+  assert.deepEqual(ann.get("a"), { coveredBy: ["summary-q3", "summary-jane"] });
+  assert.deepEqual(ann.get("b"), { coveredBy: ["summary-q3"] });
+  assert.equal(ann.has("c"), false);
+  assert.equal(digestAnnotations([{ id: "s", sources: ["missing"] }]).size, 0);
 });

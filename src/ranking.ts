@@ -302,6 +302,33 @@ function spreadExplicit(
   return out;
 }
 
+export interface DigestAnnotation {
+  /** On a summary hit: its `sources` that were also returned. */
+  digestOf?: string[];
+  /** On a raw hit: returned summaries that cite it. */
+  coveredBy?: string[];
+}
+
+/**
+ * Digest awareness without reordering: a rollup and the raw entries it
+ * cites point at each other when both are in the result, so the reader can
+ * pick the synthesis or the specifics. Summaries augment, never replace.
+ */
+export function digestAnnotations(hits: { id: string; sources?: string[] }[]): Map<string, DigestAnnotation> {
+  const present = new Set(hits.map((h) => h.id));
+  const out = new Map<string, DigestAnnotation>();
+  for (const h of hits) {
+    const cited = (h.sources ?? []).filter((s) => present.has(s) && s !== h.id);
+    if (cited.length === 0) continue;
+    out.set(h.id, { ...out.get(h.id), digestOf: cited });
+    for (const s of cited) {
+      const prev = out.get(s) ?? {};
+      out.set(s, { ...prev, coveredBy: [...(prev.coveredBy ?? []), h.id] });
+    }
+  }
+  return out;
+}
+
 function timelineMultiplier(state: TimelineState | undefined, t: RankingTunables): number {
   if (!state) return 1;
   if (state.superseded || state.resolved) return 1 - t.SUPERSEDED_PENALTY;

@@ -77,7 +77,11 @@ you want the full tail, e.g. when sweeping for anything loosely related. Read
 the top cited entry file(s) in full, then answer with citations (file paths).
 
 If a hit is a `summary` entry, its output includes a `sources:` line — pull the
-raw entries it cites when you need specifics behind the rollup.
+raw entries it cites when you need specifics behind the rollup. When a rollup
+and the raw entries it cites are both in the result, they point at each other:
+`⊕ covers: <ids>` under the summary, `⊕ digest: <summary-id>` under each raw
+hit (`digestOf` / `coveredBy` in JSON). Read the digest for the synthesis and
+the raw entries for specifics; neither replaces the other.
 
 **Names resolve through people profiles.** Write names the way the user says
 them: "Zhenya", "Jane Doe", or a slug all reach the same person once

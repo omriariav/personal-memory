@@ -11,6 +11,7 @@ import {
   applyFilters,
   bestRank,
   candidatePool,
+  digestAnnotations,
   EXHAUSTIVE_LIMIT,
   rankCandidates,
   shouldExhaustivelyAppend,
@@ -286,6 +287,10 @@ export interface SearchHit {
   chain?: ChainAnnotation;
   /** Retrieved hits whose explicit links lent this entry part of their score. */
   spreadFrom?: string[];
+  /** On a summary: its cited sources that were also returned. */
+  digestOf?: string[];
+  /** On a raw entry: returned summaries that cite it. */
+  coveredBy?: string[];
   reasons?: SearchHitReason;
 }
 
@@ -505,9 +510,11 @@ export async function searchDetailed(
   if (ranked.entityList) rankLists.push(ranked.entityList);
   const { retrievalSignalCount, limitedByK } = ranked;
   const consideredCount = exhaustive ? filtered.length : retrievalSignalCount;
+  const digests = digestAnnotations(ranked.hits.map(({ id }) => ({ id, sources: byId.get(id)?.sources })));
   const hits = ranked.hits.map(({ id, score, breakdown, spreadFrom }) => {
     const entry = byId.get(id)!;
     const chain = chainIndex.get(id);
+    const digest = digests.get(id);
     const semanticRank = bestRank(rankLists, id, "semantic");
     const lexicalRank = bestRank(rankLists, id, "lexical");
     const entityRank = bestRank(rankLists, id, "entity");
@@ -524,6 +531,8 @@ export async function searchDetailed(
       bestChunk: displayChunkText(bestChunk.get(id) ?? entry.body.slice(0, 300)),
       ...(chain ? { chain } : {}),
       ...(spreadFrom ? { spreadFrom } : {}),
+      ...(digest?.digestOf ? { digestOf: digest.digestOf } : {}),
+      ...(digest?.coveredBy ? { coveredBy: digest.coveredBy } : {}),
       reasons: {
         ...(semanticRank !== undefined ? { semanticRank } : {}),
         ...(lexicalRank !== undefined ? { lexicalRank } : {}),

@@ -53,6 +53,10 @@ export interface RecallHit {
   chain?: ChainAnnotation;
   /** Retrieved hits whose explicit links lent this entry part of their score. */
   spreadFrom?: string[];
+  /** On a summary: its cited sources that were also returned. */
+  digestOf?: string[];
+  /** On a raw entry: returned summaries that cite it. */
+  coveredBy?: string[];
   reasons?: {
     semanticRank?: number;
     lexicalRank?: number;
@@ -160,6 +164,8 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
       bestChunk: h.bestChunk,
       ...(h.chain ? { chain: h.chain } : {}),
       ...(h.spreadFrom ? { spreadFrom: h.spreadFrom } : {}),
+      ...(h.digestOf ? { digestOf: h.digestOf } : {}),
+      ...(h.coveredBy ? { coveredBy: h.coveredBy } : {}),
       ...(h.reasons ? { reasons: h.reasons } : {}),
     })),
   };

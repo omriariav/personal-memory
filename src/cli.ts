@@ -603,6 +603,8 @@ function printRecallText(report: RecallReport, showQueries: boolean): void {
       console.log(`  sources: ${shown.join(", ")}${more > 0 ? `, … (+${more} more)` : ""}`);
     }
     for (const line of chainStatusLines(h.chain, h)) console.log(`  ${line}`);
+    if (h.digestOf?.length) console.log(`  ⊕ covers: ${h.digestOf.join(", ")}`);
+    if (h.coveredBy?.length) console.log(`  ⊕ digest: ${h.coveredBy.join(", ")}`);
     if (h.reasons?.matchedTerms.length) console.log(`  matched terms: ${h.reasons.matchedTerms.join(", ")}`);
     console.log(`  ${h.relPath}`);
     console.log(`  ${snippet}${snippet.length >= 220 ? "…" : ""}`);
