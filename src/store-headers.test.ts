@@ -21,7 +21,11 @@ function md(id: string, date: string, title: string, body: string): string {
 
 function runInStore(cwd: string, script: string): any {
   // tsx by absolute path: the child's cwd is the scratch store, not the repo.
-  const out = execFileSync(process.execPath, ["--import", join(repo, "node_modules", "tsx", "dist", "loader.mjs"), "-e", script], {
+  // The script is wrapped in an async function: `node -e` has no top-level
+  // await on Node 18, and the repo's floor is Node 20 but a developer's
+  // default shell may be older.
+  const wrapped = `(async () => { ${script} })().catch((e) => { console.error(e); process.exit(1); });`;
+  const out = execFileSync(process.execPath, ["--import", join(repo, "node_modules", "tsx", "dist", "loader.mjs"), "-e", wrapped], {
     cwd,
     env: { ...process.env, MEMORY_EMBEDDINGS: "fake", MEMORY_RANK_HEADER_LEG_WEIGHT: "1" },
     encoding: "utf8",
