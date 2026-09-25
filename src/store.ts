@@ -432,6 +432,33 @@ export interface SearchHit {
 }
 
 /**
+ * Implicit neighbours: entries sharing at least `minShared` RARE slugs
+ * (people/teams/tags present in ≤ `maxDf` of the candidates — ubiquitous
+ * slugs carry no signal). A ranking-time view only; nothing is persisted.
+ */
+function rareEntityEdges(filtered: MemoryEntry[], minShared: number, maxDf: number): Map<string, string[]> {
+  const n = filtered.length;
+  const holders = new Map<string, string[]>();
+  for (const e of filtered) {
+    for (const slug of [...e.people, ...e.teams, ...e.tags]) (holders.get(slug) ?? holders.set(slug, []).get(slug)!).push(e.id);
+  }
+  const shared = new Map<string, Map<string, number>>();
+  for (const ids of holders.values()) {
+    if (ids.length < 2 || ids.length / n > maxDf) continue;
+    for (const a of ids) {
+      const row = shared.get(a) ?? shared.set(a, new Map()).get(a)!;
+      for (const b of ids) if (b !== a) row.set(b, (row.get(b) ?? 0) + 1);
+    }
+  }
+  const edges = new Map<string, string[]>();
+  for (const [a, row] of shared) {
+    const ns = [...row].filter(([, c]) => c >= minShared).map(([b]) => b);
+    if (ns.length) edges.set(a, ns);
+  }
+  return edges;
+}
+
+/**
  * Explicit neighbours within the candidate space: `follows` both ways (via
  * the chain index) and `sources` both ways (a digest and the raw entries it
  * cites). Nothing inferred — only links a human or agent asserted.
@@ -654,6 +681,8 @@ export async function searchDetailed(
     });
   }
   const edges = tunables.SPREAD_EDGE_FRACTION > 0 ? explicitEdges(filtered, filteredIds, chainIndex) : undefined;
+  const entityEdges =
+    tunables.SPREAD_ENTITY_FRACTION > 0 ? rareEntityEdges(filtered, tunables.SPREAD_MIN_SHARED, tunables.SPREAD_RARE_DF) : undefined;
   let detection: Detection | undefined;
   let entityMatches: Map<string, number> | undefined;
   if (tunables.ENTITY_LEG_WEIGHT > 0) {
@@ -662,7 +691,7 @@ export async function searchDetailed(
     // matches lexically, and boosting its every entry cost exact-title lookups.
     entityMatches = entityMatchesFor(detection.aliased, filtered, tunables.ENTITY_MAX_DF);
   }
-  const rankInput = { rankLists, filtered, exhaustive, k, timeline, edges, entityMatches };
+  const rankInput = { rankLists, filtered, exhaustive, k, timeline, edges, entityEdges, entityMatches };
   let ranked = rankCandidates(rankInput, tunables, now);
   if (ranked.entityList) rankLists.push(ranked.entityList);
 

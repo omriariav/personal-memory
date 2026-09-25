@@ -42,6 +42,14 @@ export interface RankingTunables {
   SPREAD_TOP_N: number;
   SPREAD_FANOUT: number;
   /**
+   * Spread over IMPLICIT neighbours: entries sharing ≥ SPREAD_MIN_SHARED
+   * rare slugs (people/teams/tags with df/N ≤ SPREAD_RARE_DF) with a top
+   * hit. Nothing is persisted or inferred as a link. 0 = off.
+   */
+  SPREAD_ENTITY_FRACTION: number;
+  SPREAD_MIN_SHARED: number;
+  SPREAD_RARE_DF: number;
+  /**
    * Relative cutoff: once CUTOFF_MIN_RESULTS are kept, drop results scoring
    * below CUTOFF_TAU × the top score. Never applied on an exhaustive run.
    * 0 = off.
@@ -94,6 +102,9 @@ export const IDENTITY_TUNABLES: Readonly<RankingTunables> = Object.freeze({
   SPREAD_EDGE_FRACTION: 0,
   SPREAD_TOP_N: 20,
   SPREAD_FANOUT: 10,
+  SPREAD_ENTITY_FRACTION: 0,
+  SPREAD_MIN_SHARED: 2,
+  SPREAD_RARE_DF: 0.05,
   CUTOFF_TAU: 0,
   CUTOFF_MIN_RESULTS: 8,
   ENTITY_LEG_WEIGHT: 0,

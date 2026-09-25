@@ -664,3 +664,22 @@ test("rerank runs before the timeline multiplier and the cutoff", () => {
   // rerank puts b first, then the lift raises a (b's successor) just above b
   assert.deepEqual(out.hits.map((h) => h.id), ["a", "b"]);
 });
+
+// --- entity spread (shared rare entities) ------------------------------------
+
+test("entity spread: a second edge map with its own fraction; identity 0; gains take the max with explicit spread", () => {
+  const lists: RankList[] = [{ kind: "semantic", query: q("p", 1), ids: ["a"] }];
+  const entityEdges = new Map([["a", ["x", "y"]]]);
+  const edges = new Map([["a", ["y"]]]);
+  assert.equal(IDENTITY_TUNABLES.SPREAD_ENTITY_FRACTION, 0);
+  const off = rankCandidates({ rankLists: lists, filtered: SPREAD_ENTRIES, exhaustive: false, k: 5, entityEdges }, NO_RECENCY, NOW);
+  assert.deepEqual(off.hits.map((h) => h.id), ["a"]);
+  const on = rankCandidates(
+    { rankLists: lists, filtered: SPREAD_ENTRIES, exhaustive: false, k: 5, entityEdges, edges },
+    { ...NO_RECENCY, SPREAD_ENTITY_FRACTION: 0.2, SPREAD_EDGE_FRACTION: 0.5 },
+    NOW,
+  );
+  const by = Object.fromEntries(on.hits.map((h) => [h.id, h]));
+  assert.ok(Math.abs(by.x!.score - 0.2 / 61) < 1e-12, `x via entity edge: ${by.x!.score}`);
+  assert.ok(Math.abs(by.y!.score - 0.5 / 61) < 1e-12, `y takes the larger explicit gain: ${by.y!.score}`);
+});

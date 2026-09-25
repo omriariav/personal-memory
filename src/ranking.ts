@@ -202,6 +202,8 @@ export interface RankInput {
    * already restricted to the candidate space by the caller.
    */
   edges?: Map<string, string[]>;
+  /** Implicit neighbours per id (shared rare slugs), restricted to the candidate space. */
+  entityEdges?: Map<string, string[]>;
   /** id → number of question entities (people/teams/tags) the entry carries. */
   entityMatches?: Map<string, number>;
   /** Cross-encoder scores for the reranked block (second pass); absent = no rerank. */
@@ -241,22 +243,24 @@ function spreadExplicit(
   t: RankingTunables,
   byId: Map<string, Rankable>,
 ): RankedHit[] {
-  const spread = t.SPREAD_EDGE_FRACTION > 0 && input.edges;
-  if (!spread) return base;
+  const sources: { edges: Map<string, string[]>; fraction: number }[] = [];
+  if (t.SPREAD_EDGE_FRACTION > 0 && input.edges) sources.push({ edges: input.edges, fraction: t.SPREAD_EDGE_FRACTION });
+  if (t.SPREAD_ENTITY_FRACTION > 0 && input.entityEdges) sources.push({ edges: input.entityEdges, fraction: t.SPREAD_ENTITY_FRACTION });
+  if (sources.length === 0) return base;
   const byScore = new Map(base.map((h) => [h.id, h.score]));
   const gain = new Map<string, { value: number; from: string }>();
   const lend = (to: string, value: number, from: string) => {
     const cur = gain.get(to);
     if (!cur || value > cur.value) gain.set(to, { value, from });
   };
-  if (spread) {
-    const seeds = [...base].sort((a, b) => b.score - a.score).slice(0, t.SPREAD_TOP_N);
+  const seeds = [...base].sort((a, b) => b.score - a.score).slice(0, t.SPREAD_TOP_N);
+  for (const { edges, fraction } of sources) {
     for (const seed of seeds) {
-      const neighbours = (input.edges!.get(seed.id) ?? [])
+      const neighbours = (edges.get(seed.id) ?? [])
         .filter((n) => n !== seed.id && byId.has(n))
         .sort((a, b) => (byScore.get(b) ?? 0) - (byScore.get(a) ?? 0) || byId.get(b)!.date.localeCompare(byId.get(a)!.date))
         .slice(0, t.SPREAD_FANOUT);
-      for (const n of neighbours) lend(n, t.SPREAD_EDGE_FRACTION * seed.score, seed.id);
+      for (const n of neighbours) lend(n, fraction * seed.score, seed.id);
     }
   }
   const out = base.map((h) => ({ ...h, breakdown: { ...h.breakdown } }));
