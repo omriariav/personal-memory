@@ -16,7 +16,7 @@
  */
 import { parseArgs } from "node:util";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GEN_VERSION, generateCorpus, type CorpusManifest } from "../src/eval-corpus.js";
@@ -64,8 +64,14 @@ if (backend === "local" && !existsSync(join(process.env.MEMORY_MODEL_CACHE, mode
 }
 
 // --- corpus cache -----------------------------------------------------------
+// The cache is keyed by (size, seed) only: a generator bump regenerates the
+// corpus IN PLACE. Entry bytes are deterministic, so unchanged entries keep
+// their content hash and the index sync reuses their vectors — only the case
+// manifest (and any genuinely new entries) change.
 const evalCache = join(repoRoot, ".cache", "eval");
-const corpusDir = join(evalCache, `corpus-${size}-s${seed}-g${GEN_VERSION}`);
+const corpusDir = join(evalCache, `corpus-${size}-s${seed}`);
+const legacyDir = join(evalCache, `corpus-${size}-s${seed}-g1`);
+if (!existsSync(corpusDir) && existsSync(legacyDir)) renameSync(legacyDir, corpusDir);
 if (values.fresh && existsSync(corpusDir)) {
   if (!corpusDir.startsWith(evalCache + "/")) throw new Error(`refusing to remove ${corpusDir}`);
   console.error(`↻ --fresh: removing cached corpus ${corpusDir}`);
@@ -73,12 +79,17 @@ if (values.fresh && existsSync(corpusDir)) {
 }
 mkdirSync(corpusDir, { recursive: true });
 const manifestPath = join(corpusDir, "eval-cases.json");
-let manifest: CorpusManifest;
-if (existsSync(manifestPath)) {
-  manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CorpusManifest;
+let manifest: CorpusManifest | null = existsSync(manifestPath)
+  ? (JSON.parse(readFileSync(manifestPath, "utf8")) as CorpusManifest)
+  : null;
+if (manifest && manifest.generator === GEN_VERSION) {
   console.error(`corpus: cached ${manifest.entries} entries, ${manifest.cases.length} cases (${corpusDir})`);
 } else {
-  console.error(`corpus: generating ${size} entries (seed ${seed}) …`);
+  console.error(
+    manifest
+      ? `corpus: generator ${manifest.generator} → ${GEN_VERSION}, regenerating in place (vectors reused by hash) …`
+      : `corpus: generating ${size} entries (seed ${seed}) …`,
+  );
   manifest = await generateCorpus({ root: corpusDir, total: size, seed });
   console.error(`corpus: ${manifest.entries} entries, ${manifest.cases.length} cases`);
 }

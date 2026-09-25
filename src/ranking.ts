@@ -1,5 +1,5 @@
 import type { GraphId } from "./schema.js";
-import { DEFAULT_TUNABLES, type RankingTunables } from "./ranking-tunables.js";
+import { DEFAULT_TUNABLES, IDENTITY_TUNABLES, type RankingTunables } from "./ranking-tunables.js";
 
 /**
  * Pure ranking pipeline: everything between "here are the per-phrasing
@@ -134,7 +134,7 @@ export function candidatePool(o: {
 
 // --- scoring primitives ------------------------------------------------------
 
-export function rankToRRF(ids: string[], k0 = DEFAULT_TUNABLES.RRF_K0): Map<string, number> {
+export function rankToRRF(ids: string[], k0 = IDENTITY_TUNABLES.RRF_K0): Map<string, number> {
   const m = new Map<string, number>();
   ids.forEach((id, i) => m.set(id, 1 / (k0 + i + 1)));
   return m;
@@ -155,8 +155,8 @@ export function refDate(e: Pick<Rankable, "date" | "updated">): string {
 export function recencyMultiplier(
   ref: string,
   now: number,
-  eps = DEFAULT_TUNABLES.RECENCY_EPS,
-  decayDays = DEFAULT_TUNABLES.RECENCY_DECAY_DAYS,
+  eps = IDENTITY_TUNABLES.RECENCY_EPS,
+  decayDays = IDENTITY_TUNABLES.RECENCY_DECAY_DAYS,
 ): number {
   const ageDays = Math.max(0, (now - Date.parse(ref)) / 86_400_000);
   return 1 + eps * Math.exp(-ageDays / decayDays);
@@ -176,6 +176,18 @@ export function bestRank(lists: RankList[], id: string, kind: RankList["kind"]):
 
 // --- the pipeline ------------------------------------------------------------
 
+/** What the ranking needs to know about an entry's place in a `follows` chain. */
+export interface TimelineState {
+  /** A later same-type or closing entry replaced this one's state. */
+  superseded: boolean;
+  /** An open item (pending-decision / todo) that has been settled. */
+  resolved: boolean;
+  /** This entry is the newest member of its chain. */
+  latest: boolean;
+  /** The entry holding the state now (chain `current`), or the resolver of an open item. */
+  successor?: string;
+}
+
 export interface RankInput {
   rankLists: RankList[];
   /** The filter-matching candidate space; ids outside it are dropped. */
@@ -183,6 +195,13 @@ export interface RankInput {
   /** When true, candidates with no retrieval signal are appended at score 0. */
   exhaustive: boolean;
   k: number;
+  /** Chain state per id (only chain members need an entry). */
+  timeline?: Map<string, TimelineState>;
+  /**
+   * Explicit neighbours per id (follows both ways, sources both ways),
+   * already restricted to the candidate space by the caller.
+   */
+  edges?: Map<string, string[]>;
 }
 
 export interface RankedHit {
@@ -193,22 +212,137 @@ export interface RankedHit {
     fused: number;
     /** Recency multiplier applied (1 for complete-scan appends). */
     recency: number;
+    /** Additive gain lent by explicit neighbours (0 when off). */
+    spread: number;
+    /** Floor applied because a stale predecessor was retrieved (0 when not raised). */
+    lift: number;
+    /** Timeline multiplier applied (1 when not a chain member or at identity). */
+    timeline: number;
   };
+  /** Seeds whose spread or lift reached this entry (strongest first). */
+  spreadFrom?: string[];
+}
+
+/**
+ * One hop over explicit edges: the top-N base hits each lend a fraction of
+ * their score to a bounded number of neighbours. Gains take the max across
+ * seeds so hubs never compound. Neighbours with no prior signal enter the
+ * ranking with fused = 0 (they carry no retrieval signal of their own).
+ */
+function spreadExplicit(
+  base: RankedHit[],
+  input: RankInput,
+  t: RankingTunables,
+  byId: Map<string, Rankable>,
+): RankedHit[] {
+  const spread = t.SPREAD_EDGE_FRACTION > 0 && input.edges;
+  const lift = t.CURRENT_LIFT > 0 && input.timeline;
+  if (!spread && !lift) return base;
+  const byScore = new Map(base.map((h) => [h.id, h.score]));
+  const gain = new Map<string, { value: number; from: string }>();
+  const lend = (to: string, value: number, from: string) => {
+    const cur = gain.get(to);
+    if (!cur || value > cur.value) gain.set(to, { value, from });
+  };
+  if (spread) {
+    const seeds = [...base].sort((a, b) => b.score - a.score).slice(0, t.SPREAD_TOP_N);
+    for (const seed of seeds) {
+      const neighbours = (input.edges!.get(seed.id) ?? [])
+        .filter((n) => n !== seed.id && byId.has(n))
+        .sort((a, b) => (byScore.get(b) ?? 0) - (byScore.get(a) ?? 0) || byId.get(b)!.date.localeCompare(byId.get(a)!.date))
+        .slice(0, t.SPREAD_FANOUT);
+      for (const n of neighbours) lend(n, t.SPREAD_EDGE_FRACTION * seed.score, seed.id);
+    }
+  }
+  const out = base.map((h) => ({ ...h, breakdown: { ...h.breakdown } }));
+  const present = new Map(out.map((h) => [h.id, h]));
+  const blank = (id: string): RankedHit => ({ id, score: 0, breakdown: { fused: 0, recency: 1, spread: 0, lift: 0, timeline: 1 } });
+  for (const [id, g] of gain) {
+    let h = present.get(id);
+    if (!h) {
+      h = blank(id);
+      out.push(h);
+      present.set(id, h);
+    }
+    h.breakdown.spread = g.value;
+    h.spreadFrom = [g.from];
+  }
+
+  // A retrieved stale member (superseded, or a resolved open item) raises the
+  // entry that holds the matter's state now to AT LEAST CURRENT_LIFT × the
+  // stale member's POST-spread score — a floor, never a bonus: a successor
+  // already ranked higher is left alone, and nothing is demoted below
+  // unrelated entries. Measured after spread because undirected edges also
+  // lend the successor's score back to the stale member.
+  const floor = new Map<string, { value: number; from: string }>();
+  if (lift) {
+    for (const h of out) {
+      const succ = input.timeline!.get(h.id)?.successor;
+      if (!succ || succ === h.id || !byId.has(succ)) continue;
+      const value = t.CURRENT_LIFT * (h.breakdown.fused * h.breakdown.recency + h.breakdown.spread);
+      const cur = floor.get(succ);
+      if (!cur || value > cur.value) floor.set(succ, { value, from: h.id });
+    }
+  }
+  for (const [id, f] of floor) {
+    let h = present.get(id);
+    if (!h) {
+      h = blank(id);
+      out.push(h);
+      present.set(id, h);
+    }
+    const own = h.breakdown.fused * h.breakdown.recency + h.breakdown.spread;
+    if (f.value > own) {
+      h.breakdown.lift = f.value;
+      h.spreadFrom = [f.from, ...(h.spreadFrom ?? []).filter((x) => x !== f.from)];
+    }
+  }
+  return out;
+}
+
+function timelineMultiplier(state: TimelineState | undefined, t: RankingTunables): number {
+  if (!state) return 1;
+  if (state.superseded || state.resolved) return 1 - t.SUPERSEDED_PENALTY;
+  if (state.latest) return 1 + t.LATEST_BONUS;
+  return 1;
 }
 
 export interface RankOutput {
   hits: RankedHit[];
-  /** Candidates carrying at least one retrieval signal. */
+  /** Candidates carrying at least one retrieval signal (measured before the cutoff). */
   retrievalSignalCount: number;
   /** True when more ranked candidates existed than `k` allowed. */
   limitedByK: boolean;
+  /** Relative score cutoff outcome. */
+  cutoff: { applied: boolean; dropped: number };
 }
 
-function fuse(lists: RankList[], k0: number): Map<string, number> {
-  const fused = new Map<string, number>();
+/** Drop lists whose (kind, id order) repeats an earlier one, keeping the max weight on the survivor. */
+function dedupeLists(lists: RankList[]): RankList[] {
+  const seen = new Map<string, RankList>();
+  const out: RankList[] = [];
   for (const list of lists) {
-    for (const [id, s] of rankToRRF(list.ids, k0)) {
-      fused.set(id, (fused.get(id) ?? 0) + s * list.query.weight);
+    const key = `${list.kind} ${list.ids.join(" ")}`;
+    const prev = seen.get(key);
+    if (prev) {
+      if (list.query.weight > prev.query.weight) prev.query = list.query;
+      continue;
+    }
+    const copy = { ...list };
+    seen.set(key, copy);
+    out.push(copy);
+  }
+  return out;
+}
+
+function fuse(lists: RankList[], t: RankingTunables): Map<string, number> {
+  const legWeight = { semantic: t.SEMANTIC_WEIGHT, lexical: t.LEXICAL_WEIGHT };
+  const fused = new Map<string, number>();
+  for (const list of t.DEDUPE_IDENTICAL_LISTS ? dedupeLists(lists) : lists) {
+    const w = legWeight[list.kind] * list.query.weight;
+    if (w === 0) continue;
+    for (const [id, s] of rankToRRF(list.ids, t.RRF_K0)) {
+      fused.set(id, (fused.get(id) ?? 0) + s * w);
     }
   }
   return fused;
@@ -220,20 +354,39 @@ export function rankCandidates(
   now: number = Date.now(),
 ): RankOutput {
   const byId = new Map(input.filtered.map((e) => [e.id, e]));
-  const fused = fuse(input.rankLists, tunables.RRF_K0);
+  const fused = fuse(input.rankLists, tunables);
 
-  const scored: RankedHit[] = [];
+  // Base score: fusion × recency, in first-seen (list) order.
+  const base: RankedHit[] = [];
   for (const [id, f] of fused) {
     const e = byId.get(id);
     if (!e) continue;
     const recency = recencyMultiplier(refDate(e), now, tunables.RECENCY_EPS, tunables.RECENCY_DECAY_DAYS);
-    scored.push({ id, score: f * recency, breakdown: { fused: f, recency } });
+    base.push({ id, score: f * recency, breakdown: { fused: f, recency, spread: 0, lift: 0, timeline: 1 } });
+  }
+  const retrievalSignalCount = base.length;
+
+  const scored = spreadExplicit(base, input, tunables, byId);
+
+  for (const h of scored) {
+    const timeline = timelineMultiplier(input.timeline?.get(h.id), tunables);
+    h.breakdown.timeline = timeline;
+    const own = h.breakdown.fused * h.breakdown.recency + h.breakdown.spread;
+    h.score = Math.max(own, h.breakdown.lift) * timeline;
   }
   // Stable sort: exact ties keep first-seen (list) order.
   scored.sort((a, b) => b.score - a.score);
-  const retrievalSignalCount = scored.length;
 
+  // Relative cutoff trims the long tail — but never on an exhaustive run,
+  // whose contract is that every candidate is ranked and only k limits output.
   let ranked = scored;
+  const cutoff = { applied: false, dropped: 0 };
+  if (!input.exhaustive && tunables.CUTOFF_TAU > 0 && scored.length > 0) {
+    const floor = tunables.CUTOFF_TAU * scored[0]!.score;
+    ranked = scored.filter((h, i) => i < tunables.CUTOFF_MIN_RESULTS || h.score >= floor);
+    cutoff.dropped = scored.length - ranked.length;
+    cutoff.applied = cutoff.dropped > 0;
+  }
   if (input.exhaustive) {
     // Recall guarantee: append filter-matching entries with no retrieval
     // signal (newest first) so nothing is droppable before the k-cut.
@@ -241,7 +394,7 @@ export function rankCandidates(
     const rest = input.filtered
       .filter((e) => !present.has(e.id))
       .sort((a, b) => b.date.localeCompare(a.date))
-      .map((e) => ({ id: e.id, score: 0, breakdown: { fused: 0, recency: 1 } }));
+      .map((e) => ({ id: e.id, score: 0, breakdown: { fused: 0, recency: 1, spread: 0, lift: 0, timeline: 1 } }));
     ranked = [...scored, ...rest];
   }
 
@@ -249,5 +402,6 @@ export function rankCandidates(
     hits: ranked.slice(0, input.k),
     retrievalSignalCount,
     limitedByK: ranked.length > input.k,
+    cutoff,
   };
 }

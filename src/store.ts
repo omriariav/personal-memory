@@ -21,6 +21,7 @@ import {
   type RankList,
   type SearchCompleteness,
   type SearchFilters,
+  type TimelineState,
 } from "./ranking.js";
 import { resolveTunables, type RankingTunables } from "./ranking-tunables.js";
 
@@ -254,7 +255,34 @@ export interface SearchHit {
   bestChunk: string;
   /** Timeline context when the entry belongs to a `follows` chain. */
   chain?: ChainAnnotation;
+  /** Retrieved hits whose explicit links lent this entry part of their score. */
+  spreadFrom?: string[];
   reasons?: SearchHitReason;
+}
+
+/**
+ * Explicit neighbours within the candidate space: `follows` both ways (via
+ * the chain index) and `sources` both ways (a digest and the raw entries it
+ * cites). Nothing inferred — only links a human or agent asserted.
+ */
+function explicitEdges(
+  filtered: MemoryEntry[],
+  filteredIds: Set<string>,
+  chainIndex: Map<string, ChainAnnotation>,
+): Map<string, string[]> {
+  const edges = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    if (a === b || !filteredIds.has(a) || !filteredIds.has(b)) return;
+    (edges.get(a) ?? edges.set(a, new Set()).get(a)!).add(b);
+    (edges.get(b) ?? edges.set(b, new Set()).get(b)!).add(a);
+  };
+  for (const e of filtered) {
+    for (const s of e.sources ?? []) link(e.id, s);
+    const chain = chainIndex.get(e.id);
+    for (const p of chain?.prev ?? []) link(e.id, p);
+    for (const n of chain?.next ?? []) link(e.id, n);
+  }
+  return new Map([...edges].map(([id, set]) => [id, [...set]]));
 }
 
 export interface SearchReport {
@@ -269,6 +297,8 @@ export interface SearchReport {
   k: number;
   pool: number;
   chunkRows: number;
+  /** Relative score cutoff outcome (never applied on exhaustive runs). */
+  cutoff?: { tau: number; applied: boolean; dropped: number };
 }
 
 export interface SearchResult {
@@ -286,6 +316,8 @@ export interface SearchOptions {
   now?: number;
   /** Per-run ranking overrides (harness sweeps); env MEMORY_RANK_* still applies. */
   tunables?: Partial<RankingTunables>;
+  /** Disable the relative score cutoff for this run (`--no-cutoff`). */
+  noCutoff?: boolean;
 }
 
 export const DEFAULT_COMPLETE_LIMIT = EXHAUSTIVE_LIMIT;
@@ -328,7 +360,7 @@ export async function searchDetailed(
   const qs = querySpecs(queries);
   const completeness = opts.completeness ?? "auto";
   const completeLimit = opts.completeLimit ?? DEFAULT_COMPLETE_LIMIT;
-  const tunables = resolveTunables(opts.tunables);
+  const tunables = resolveTunables({ ...opts.tunables, ...(opts.noCutoff ? { CUTOFF_TAU: 0 } : {}) });
   const now = opts.now ?? Date.now();
   if (qs.length === 0) {
     return {
@@ -417,11 +449,23 @@ export async function searchDetailed(
     rankLists.push({ kind: "lexical", query: q, ids });
   }
 
-  // --- fusion, recency, completeness append, k-cut: the pure pipeline ---
-  const ranked = rankCandidates({ rankLists, filtered, exhaustive, k }, tunables, now);
+  // --- fusion, recency, timeline, completeness append, k-cut: the pure pipeline ---
+  const timeline = new Map<string, TimelineState>();
+  for (const [id, ann] of chainIndex) {
+    const resolved = ann.status === "resolved";
+    const successor = ann.superseded ? ann.current.id : resolved ? ann.resolvedBy : undefined;
+    timeline.set(id, {
+      superseded: ann.superseded,
+      resolved,
+      latest: ann.latest.id === id,
+      ...(successor ? { successor } : {}),
+    });
+  }
+  const edges = tunables.SPREAD_EDGE_FRACTION > 0 ? explicitEdges(filtered, filteredIds, chainIndex) : undefined;
+  const ranked = rankCandidates({ rankLists, filtered, exhaustive, k, timeline, edges }, tunables, now);
   const { retrievalSignalCount, limitedByK } = ranked;
   const consideredCount = exhaustive ? filtered.length : retrievalSignalCount;
-  const hits = ranked.hits.map(({ id, score }) => {
+  const hits = ranked.hits.map(({ id, score, breakdown, spreadFrom }) => {
     const entry = byId.get(id)!;
     const chain = chainIndex.get(id);
     const semanticRank = bestRank(rankLists, id, "semantic");
@@ -429,6 +473,7 @@ export async function searchDetailed(
     const retrievalSignals = [
       ...(semanticRank !== undefined ? ["semantic"] : []),
       ...(lexicalRank !== undefined ? ["lexical"] : []),
+      ...(breakdown.spread > 0 ? ["spread"] : []),
       ...(score === 0 && exhaustive ? ["complete-scan"] : []),
     ];
     return {
@@ -436,6 +481,7 @@ export async function searchDetailed(
       score,
       bestChunk: displayChunkText(bestChunk.get(id) ?? entry.body.slice(0, 300)),
       ...(chain ? { chain } : {}),
+      ...(spreadFrom ? { spreadFrom } : {}),
       reasons: {
         ...(semanticRank !== undefined ? { semanticRank } : {}),
         ...(lexicalRank !== undefined ? { lexicalRank } : {}),
@@ -459,6 +505,7 @@ export async function searchDetailed(
       k,
       pool,
       chunkRows,
+      cutoff: { tau: tunables.CUTOFF_TAU, ...ranked.cutoff },
     },
   };
 }

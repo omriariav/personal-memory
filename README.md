@@ -119,8 +119,11 @@ Track a matter over time:
 
 When a memory develops or settles an earlier one, the agent links them with a
 `follows` chain. Recall then annotates any stale chain member with the entry
-that superseded it, and open pending decisions and todos report whether they
-were resolved — so an old snapshot can never masquerade as the current state.
+that superseded it (a same-type successor, or a decision that closed an open
+item) and ranks it lower; a member that was merely extended (a meeting after a
+decision) stays current and points at the later developments. Open pending
+decisions and todos report whether they were resolved — so an old snapshot can
+never masquerade as the current state.
 
 Agents should retrieve through the local memory CLI, write through `memory add`,
 and cite the memory files they used. The full agent contract is in
@@ -247,7 +250,8 @@ or settles, forming a chain per evolving matter. Everything else is derived at
 read time — nothing to keep in sync:
 
 - Recall and query hits carry the chain context: stale members are annotated
-  with `⤷ superseded by: <id>`, and pending decisions and todos report
+  with `⤷ superseded by: <id>`, still-current members with later additions
+  with `↳ extended by: <id>`, and pending decisions and todos report
   `status: open` or `status: resolved by <id>` (also in `--format json`).
 - Ranking gets a mild recency boost (at most +2%, decaying over ~3 months), so
   newer entries win near-ties without burying strong older matches.

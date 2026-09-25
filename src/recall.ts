@@ -19,6 +19,8 @@ export interface RecallOptions {
   k?: number;
   deep?: boolean;
   noExpand?: boolean;
+  /** Disable the relative score cutoff (`--no-cutoff`). */
+  noCutoff?: boolean;
   completeness?: SearchCompleteness;
   completeLimit?: number;
   requireComplete?: boolean;
@@ -47,6 +49,8 @@ export interface RecallHit {
   bestChunk: string;
   /** Timeline context when the entry belongs to a `follows` chain. */
   chain?: ChainAnnotation;
+  /** Retrieved hits whose explicit links lent this entry part of their score. */
+  spreadFrom?: string[];
   reasons?: {
     semanticRank?: number;
     lexicalRank?: number;
@@ -85,6 +89,7 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
     completeLimit,
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     ...(opts.tunables ? { tunables: opts.tunables } : {}),
+    ...(opts.noCutoff ? { noCutoff: true } : {}),
   });
 
   const warnings: string[] = [];
@@ -138,6 +143,7 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
       score: h.score,
       bestChunk: h.bestChunk,
       ...(h.chain ? { chain: h.chain } : {}),
+      ...(h.spreadFrom ? { spreadFrom: h.spreadFrom } : {}),
       ...(h.reasons ? { reasons: h.reasons } : {}),
     })),
   };

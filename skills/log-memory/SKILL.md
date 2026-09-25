@@ -97,7 +97,9 @@ the latest state instead of a stale one:
 - The CLI validates targets (must exist, not be newer, no cycles) and derives
   everything else at read time: an unresolved `pending-decision`/`todo` shows as
   `[open]`, a chained one as `[resolved → <id>]`, and recall annotates stale
-  chain members with `⤷ superseded by: <latest-id>`.
+  chain members with `⤷ superseded by: <id>` (same-type successor, or a
+  decision/todo/note closing an open item) and still-current ones with
+  `↳ extended by: <id>` (e.g. a meeting after a decision).
 - Don't confuse this with `--update`: same evolving *source thread* → update in
   place; a **new development of a matter** → new entry + `--follows`.
 

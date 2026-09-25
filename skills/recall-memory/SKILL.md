@@ -70,8 +70,11 @@ candidate pools and `complete-if-small` (≤200 matching entries): when exhausti
 is true, **every** candidate entered consideration and nothing was silently
 dropped before the `-k` cut. Use `--complete` to force a complete scan,
 `--require-complete` when a non-exhaustive answer is unacceptable, and
-`--no-expand` only when the supplied phrases should be used exactly. Read the top
-cited entry file(s) in full, then answer with citations (file paths).
+`--no-expand` only when the supplied phrases should be used exactly. On
+non-exhaustive runs the long tail is trimmed at half the top score (the JSON
+report's `cutoff` field says how many were dropped); pass `--no-cutoff` when
+you want the full tail, e.g. when sweeping for anything loosely related. Read
+the top cited entry file(s) in full, then answer with citations (file paths).
 
 If a hit is a `summary` entry, its output includes a `sources:` line — pull the
 raw entries it cites when you need specifics behind the rollup.
@@ -81,15 +84,23 @@ raw entries it cites when you need specifics behind the rollup.
 Entries can be chained with `follows` links (note → pending-decision →
 decision). When a hit belongs to a chain, recall annotates it:
 
-- `⤷ superseded by: <id> (<type> · <date>)` — the matter developed after this
-  entry; **Read that latest entry before answering** and present IT as the
-  current state (cite both).
+- `⤷ superseded by: <id> (<type> · <date>)` — a later entry REPLACED this
+  one's state: the same type again (a newer decision after a decision), or a
+  decision/todo/note that closed an open `pending-decision`/`todo`. **Read
+  that entry before answering** and present IT as the current state (cite
+  both). Superseded members are ranked lower, never hidden — do not "correct"
+  the order by hand.
+- `↳ extended by: <id> (<type> · <date>)` — later developments were ADDED
+  without replacing this entry (a meeting after a decision, a pending item
+  raised from a note): this entry is still the state; cite both.
 - `status: open` / `status: resolved by <id>` — whether a
   `pending-decision`/`todo` was settled. Never report an item marked
   `resolved by <x>` as still open, and never present a superseded plan or
   pending decision as the current one.
 - In `--format json`, the same data is the `chain` field per hit
-  (`prev`/`next`/`latest`/`status`/`resolvedBy`) plus the raw `follows` ids.
+  (`prev`/`next`/`relations`/`superseded`/`current`/`latest`/`status`/
+  `resolvedBy`) plus the raw `follows` ids. `current` is the entry holding
+  the state now; `latest` is the newest member of the whole chain.
 
 **B. Synthesis / planning** ("how has Jane evolved?", "themes across this
 quarter?", "who's ready for promotion?", "prep for my staff meeting") →

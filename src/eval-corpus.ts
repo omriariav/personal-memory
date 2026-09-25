@@ -9,7 +9,7 @@ import { CASE_KINDS, type CaseKind, type EvalCase } from "./eval.js";
  * (seed 42, total 4000); the extra case families are appended AFTER it so
  * the base output never shifts. Bump GEN_VERSION whenever output changes.
  */
-export const GEN_VERSION = 1;
+export const GEN_VERSION = 2; // 2: chain-NN-stale cases (entries unchanged since 1)
 
 export { CASE_KINDS };
 
@@ -287,6 +287,16 @@ export async function generateCorpus(opts: GenOptions): Promise<CorpusManifest> 
         expect: [pending],
         passAtK: 5,
         expectChain: { id: pending, status: "resolved", latest: decision },
+      });
+      // Asked in the STALE member's own words: the current state must still win.
+      cases.push({
+        id: `chain-${pad2(n)}-stale`,
+        kind: "chain",
+        query: `waiting on the security review for the ${topic} Alpha renewal versus Beta`,
+        expect: { [decision]: 3, [pending]: 2 },
+        mustNotOutrank: [[pending, decision]],
+        passAtK: 10,
+        notes: "query paraphrases the superseded pending-decision; the decision that closed it must rank above it",
       });
     }
   }

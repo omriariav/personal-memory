@@ -110,8 +110,10 @@ function chainStatusLines(
   self: { id: string; type: string },
 ): string[] {
   const lines: string[] = [];
-  if (chain && chain.latest.id !== self.id) {
-    lines.push(`⤷ superseded by: ${chain.latest.id} (${chain.latest.type} · ${chain.latest.date})`);
+  if (chain?.superseded) {
+    lines.push(`⤷ superseded by: ${chain.current.id} (${chain.current.type} · ${chain.current.date})`);
+  } else if (chain && chain.latest.id !== self.id) {
+    lines.push(`↳ extended by: ${chain.latest.id} (${chain.latest.type} · ${chain.latest.date})`);
   }
   const status = chain?.status ?? (self.type === "pending-decision" || self.type === "todo" ? "open" : undefined);
   if (status) {
@@ -525,6 +527,7 @@ async function cmdQuery(argv: string[]) {
       graph: { type: "string" },
       k: { type: "string", short: "k" },
       deep: { type: "boolean" },
+      "no-cutoff": { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -537,7 +540,7 @@ async function cmdQuery(argv: string[]) {
   }
   const deep = Boolean(values.deep);
   const k = values.k ? Number(values.k) : deep ? 40 : 8;
-  const hits = await search(queries, filtersFrom(values), k, { deep });
+  const hits = await search(queries, filtersFrom(values), k, { deep, noCutoff: Boolean(values["no-cutoff"]) });
   if (hits.length === 0) {
     console.log("(no matches)");
     return;
@@ -623,6 +626,7 @@ async function cmdRecall(argv: string[]) {
       "require-complete": { type: "boolean" },
       "no-complete": { type: "boolean" },
       "no-expand": { type: "boolean" },
+      "no-cutoff": { type: "boolean" },
       "show-queries": { type: "boolean" },
       shallow: { type: "boolean" },
     },
@@ -642,6 +646,7 @@ async function cmdRecall(argv: string[]) {
     k: positiveInt(values.k, 40, "-k"),
     deep: !values.shallow,
     noExpand: Boolean(values["no-expand"]),
+    noCutoff: Boolean(values["no-cutoff"]),
     completeness: recallCompleteness(values),
     completeLimit: positiveInt(values["complete-limit"], 200, "--complete-limit"),
     requireComplete: Boolean(values["require-complete"]),
@@ -1151,11 +1156,11 @@ Usage:
   memory rules [list]                  # standing distribution rules (memory/graphs/rules.json)
   memory rules apply [--dry-run]       # reconcile all rules against existing private entries
   memory index [--force]
-  memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep]
+  memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep] [--no-cutoff]
             # each quoted positional is a separate phrasing; all are fused (2-4 recommended)
             # --deep: recall-over-precision preset (k=40, wider candidate pool)
   memory recall "<question>" ["<agent phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph G] [-k N]
-            [--complete | --complete-if-small | --no-complete] [--require-complete] [--no-expand] [--format text|json]
+            [--complete | --complete-if-small | --no-complete] [--require-complete] [--no-expand] [--no-cutoff] [--format text|json]
             # first phrasing is primary; extras are agent-supplied; CLI adds deterministic expansions unless --no-expand
             # default: k=40, deep pools, complete-if-small (limit 200)
             # --graph <name> scopes to one graph's members; default searches ALL (shared memberships labeled)

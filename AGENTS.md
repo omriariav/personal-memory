@@ -110,8 +110,12 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   `pending-decision` → `decision`) is chained by setting `follows` on each later
   entry (`add --follows` at capture, `link` after the fact). Everything else is
   **derived at read time**: recall/query hits carry a `chain` annotation
-  (`latest`, `status: open|resolved`, `resolvedBy`) and print
-  `⤷ superseded by: <id>` on stale members; `list`/`person` mark open items
+  (`relations`, `superseded`, `current`, `latest`, `status: open|resolved`,
+  `resolvedBy`). A follower **supersedes** its predecessor when it is the same
+  type or closes an open item (decision/todo/note after a
+  pending-decision/todo); anything else **extends** it. Stale members print
+  `⤷ superseded by: <id>` (and rank lower, never hidden); still-current
+  members with later developments print `↳ extended by: <id>`. `list`/`person` mark open items
   `[open]` / `[resolved → <id>]`. Settle an open matter with a **new** linked
   entry — never by rewriting the old one. Removing a followed entry leaves a
   dangling link (tolerated; `maintenance` reports it). (`gmail`, `slack`,
@@ -150,8 +154,14 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   matches ≤200 entries (every match is ranked — nothing droppable before the
   k-cut); unfiltered runs use corpus-scaled candidate pools.
 - **Ranking is measured, not guessed:** the pure pipeline lives in
-  `src/ranking.ts` (tunables in `src/ranking-tunables.ts`; every knob has an
-  identity default, overridable per process via `MEMORY_RANK_<NAME>`).
+  `src/ranking.ts` (tunables in `src/ranking-tunables.ts`, overridable per
+  process via `MEMORY_RANK_<NAME>`). Two profiles: `current` (default —
+  sharper RRF k0 20, a *floor* that puts a chain's current state just above a
+  retrieved stale member, one-hop spread over explicit links, a relative
+  score cutoff at 0.5 × top that `--no-cutoff` disables and exhaustive runs
+  never apply) and `legacy` (`MEMORY_RANK_PROFILE=legacy`, the pre-change
+  ordering bit-for-bit). Nothing is ever hidden or demoted below unrelated
+  entries; a blanket penalty on superseded entries was measured and rejected.
   `npm run eval` scores a deterministic synthetic corpus (`src/eval-corpus.ts`,
   cached under `.cache/eval/`) against the committed `docs/eval/baseline-4k.json`
   — needles, near-duplicates, paraphrases, nickname aliases, follows chains,

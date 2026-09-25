@@ -183,3 +183,13 @@ test("compareReports: an xfail case flipping to fail never regresses", () => {
   const cur = report([result("a", "needle", [1], 1), result("x", "alias", [null], 1, true)]);
   assert.equal(compareReports(base, cur).regressed, false);
 });
+
+test("summarize reports the mean returned count so a cutoff's trimming is visible", () => {
+  const c: EvalCase = { id: "r", kind: "needle", query: "q", expect: ["a"] };
+  const r1 = evaluateCase(c, { hits: [hit("a"), hit("b"), hit("c")], exhaustive: false }, 1);
+  const r2 = evaluateCase(c, { hits: [hit("a")], exhaustive: false }, 1);
+  assert.equal(r1.returned, 3);
+  assert.equal(summarize([r1, r2]).meanReturned, 2);
+  const cmp = compareReports(report([r1]), report([r2]));
+  assert.equal(cmp.deltas.meanReturned, -2);
+});

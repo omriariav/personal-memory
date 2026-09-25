@@ -72,6 +72,8 @@ export interface CaseResult {
   lexicalBlind?: boolean;
   ms: number;
   pass: boolean;
+  /** Number of hits the engine returned (before the harness looks at ranks). */
+  returned: number;
   top: { id: string; score: number }[];
 }
 
@@ -90,6 +92,8 @@ export interface EvalSummary {
   mrr: number;
   ndcg10: number;
   pairPassRate: number;
+  /** Mean hits returned per case — what a cutoff trims. */
+  meanReturned: number;
   byKind: Record<string, KindSummary>;
   latency: { p50: number; p95: number; mean: number; n: number };
   failures: CaseResult[];
@@ -217,6 +221,7 @@ export function evaluateCase(c: EvalCase, run: CaseRun, ms: number): CaseResult 
     ...(lexicalBlind !== undefined ? { lexicalBlind } : {}),
     ms,
     pass,
+    returned: run.hits.length,
     top: run.hits.slice(0, 10).map((h) => ({ id: h.id, score: h.score })),
   };
 }
@@ -250,6 +255,7 @@ export function summarize(results: CaseResult[]): EvalSummary {
     mrr: mean(gated.map((r) => r.reciprocalRank)),
     ndcg10: mean(gated.map((r) => r.ndcg10)),
     pairPassRate: allPairs.length ? allPairs.filter((p) => p.ok).length / allPairs.length : 1,
+    meanReturned: mean(results.map((r) => r.returned ?? 0)),
     byKind,
     latency: { p50: percentile(ms, 50), p95: percentile(ms, 95), mean: mean(ms), n: ms.length },
     failures: gated.filter((r) => !r.pass),
@@ -275,6 +281,7 @@ function metricsOf(s: EvalSummary): Record<string, number> {
     mrr: s.mrr,
     ndcg10: s.ndcg10,
     pairPassRate: s.pairPassRate,
+    meanReturned: s.meanReturned ?? 0,
     p50ms: s.latency.p50,
     p95ms: s.latency.p95,
   };
@@ -404,7 +411,7 @@ export function renderText(report: EvalReport): string {
   lines.push(
     `recall@1 ${pct(s.recallAt[1])} · @5 ${pct(s.recallAt[5])} · @10 ${pct(s.recallAt[10])} · @40 ${pct(s.recallAt[40])} · MRR ${s.mrr.toFixed(4)} · nDCG@10 ${s.ndcg10.toFixed(4)} · pairs ${pct(s.pairPassRate)}`,
   );
-  lines.push(`latency p50 ${s.latency.p50} ms · p95 ${s.latency.p95} ms · mean ${s.latency.mean.toFixed(0)} ms`);
+  lines.push(`latency p50 ${s.latency.p50} ms · p95 ${s.latency.p95} ms · mean ${s.latency.mean.toFixed(0)} ms · mean returned ${s.meanReturned.toFixed(1)}`);
   lines.push("");
   lines.push(`${"kind".padEnd(11)} ${"n".padStart(4)} ${"pass".padStart(5)} ${"recall@10".padStart(10)} ${"MRR".padStart(7)}`);
   for (const [kind, k] of Object.entries(s.byKind)) {
