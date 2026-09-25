@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { INDEX_DIR, LEXICAL_TITLE_REPEAT, entrySearchText, hashEntry } from "./ingest.js";
 import type { MemoryEntry } from "./schema.js";
 
@@ -54,9 +54,9 @@ function emptyIndex(): LexicalIndex {
   return { version: LEXICAL_VERSION, titleRepeat: LEXICAL_TITLE_REPEAT, docs: [], postings: {} };
 }
 
-export async function readLexical(): Promise<LexicalIndex | null> {
+export async function readLexical(path: string = LEXICAL_PATH): Promise<LexicalIndex | null> {
   try {
-    const idx = JSON.parse(await readFile(LEXICAL_PATH, "utf8")) as LexicalIndex;
+    const idx = JSON.parse(await readFile(path, "utf8")) as LexicalIndex;
     if (
       idx.version === LEXICAL_VERSION &&
       (idx.titleRepeat ?? 1) === LEXICAL_TITLE_REPEAT &&
@@ -91,8 +91,8 @@ export function buildLexical(entries: MemoryEntry[]): LexicalIndex {
  * only changed/new docs, tombstones removed ones, compacts (full rebuild in
  * memory) when tombstones pile up. Returns true if anything changed.
  */
-export async function syncLexical(entries: MemoryEntry[]): Promise<boolean> {
-  let idx = (await readLexical()) ?? emptyIndex();
+export async function syncLexical(entries: MemoryEntry[], path: string = LEXICAL_PATH): Promise<boolean> {
+  let idx = (await readLexical(path)) ?? emptyIndex();
 
   const wanted = new Map(entries.map((e) => [e.id, hashEntry(e)]));
   const drop = new Set<number>();
@@ -121,9 +121,22 @@ export async function syncLexical(entries: MemoryEntry[]): Promise<boolean> {
   const tombstones = idx.docs.filter((d) => !d).length;
   if (tombstones > idx.docs.length / 4) idx = buildLexical(entries);
 
-  await mkdir(INDEX_DIR, { recursive: true });
-  await writeFile(LEXICAL_PATH, JSON.stringify(idx), "utf8");
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(idx), "utf8");
   return true;
+}
+
+/**
+ * The read-path guarantee: a missing, corrupt or older-version index file is
+ * rebuilt from the current entries and persisted right here, so an upgrade
+ * never leaves `maintenance` reporting a missing lexical index until the
+ * next write, and search never rebuilds BM25 in memory per query.
+ */
+export async function ensureLexical(entries: MemoryEntry[], path: string = LEXICAL_PATH): Promise<LexicalIndex> {
+  const existing = await readLexical(path);
+  if (existing) return existing;
+  await syncLexical(entries, path);
+  return (await readLexical(path)) ?? buildLexical(entries);
 }
 
 /**

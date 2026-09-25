@@ -80,3 +80,30 @@ test("stem: light suffix stripping, never below the length guards", () => {
 test("tokenize: lowercase alphanumerics, drops single-char tokens, stems", () => {
   assert.deepEqual(tokenize("Jane-Doe's A/B tests, 2026!"), ["jane", "doe", "test", "2026"]);
 });
+
+// --- self-healing on version mismatch ----------------------------------------
+
+test("ensureLexical: an index file from an older version is rebuilt on the read path and persisted", async () => {
+  const { mkdtempSync, rmSync, writeFileSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { ensureLexical } = await import("./lexical.js");
+  const dir = mkdtempSync(join(tmpdir(), "pm-lex-"));
+  try {
+    const path = join(dir, "lexical.json");
+    writeFileSync(path, JSON.stringify({ version: 2, docs: [{ id: "old", hash: "h", len: 1 }], postings: { stale: [[0, 1]] } }));
+    const entries = [
+      { id: "a", date: "2026-01-01", type: "note", title: "Alpha rollout", people: [], teams: [], tags: [], body: "alpha body", path: "/x/a.md", paths: {}, graphs: ["default"] },
+    ] as any[];
+    const idx = await ensureLexical(entries, path);
+    assert.equal(idx.version, 3);
+    assert.deepEqual(idx.docs.map((d) => d?.id), ["a"]);
+    assert.ok(idx.postings.alpha, "rebuilt from the current entries");
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 3, "persisted, so maintenance never reports it missing");
+    // a second call reads the persisted file without rebuilding
+    const again = await ensureLexical(entries, path);
+    assert.deepEqual(again.docs, idx.docs);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

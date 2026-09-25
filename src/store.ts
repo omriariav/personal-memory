@@ -5,7 +5,7 @@ import type { OptimizeStats } from "@lancedb/lancedb";
 import { getEmbedder, type Embedder } from "./embed.js";
 import { chunkEntry, displayChunkText, entrySearchText, hashEntry, headerText, loadAllEntries, INDEX_DIR } from "./ingest.js";
 import { packSlugs, type GraphId, type MemoryEntry, type MemoryRecord } from "./schema.js";
-import { readLexical, buildLexical, syncLexical, bm25Scores, tokenize } from "./lexical.js";
+import { ensureLexical, syncLexical, bm25Scores, tokenize } from "./lexical.js";
 import { buildChainIndex, type ChainAnnotation } from "./chains.js";
 import {
   applyFilters,
@@ -658,7 +658,7 @@ export async function searchDetailed(
   }
 
   // --- lexical ranking lists, one per phrasing, within the filtered set ---
-  const lexIdx = (await readLexical()) ?? buildLexical(entries);
+  const lexIdx = await ensureLexical(entries);
   for (const q of qs) {
     const scores = bm25Scores(q.text, lexIdx);
     const ids = [...scores.entries()]
