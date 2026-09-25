@@ -7,6 +7,26 @@ import { chunkEntry, displayChunkText, entrySearchText, hashEntry, loadAllEntrie
 import { packSlugs, type GraphId, type MemoryEntry, type MemoryRecord } from "./schema.js";
 import { readLexical, buildLexical, syncLexical, bm25Scores, tokenize } from "./lexical.js";
 import { buildChainIndex, type ChainAnnotation } from "./chains.js";
+import {
+  applyFilters,
+  bestRank,
+  candidatePool,
+  EXHAUSTIVE_LIMIT,
+  rankCandidates,
+  shouldExhaustivelyAppend,
+  SLUG_RE,
+  whereClause,
+  type QueryOrigin,
+  type QuerySpec,
+  type RankList,
+  type SearchCompleteness,
+  type SearchFilters,
+} from "./ranking.js";
+import { resolveTunables, type RankingTunables } from "./ranking-tunables.js";
+
+// The pure ranking layer lives in ranking.ts; re-exported so existing
+// importers (cli, server, recall, membership) keep working unchanged.
+export { applyFilters, type QueryOrigin, type QuerySpec, type SearchCompleteness, type SearchFilters };
 
 const META_PATH = join(INDEX_DIR, "meta.json");
 const TABLE = "memory";
@@ -221,27 +241,6 @@ export async function indexStatus(): Promise<IndexStatus> {
   return { ...base, indexedEntries, staleEntries, missingEntries, chunkRows: rows.length };
 }
 
-export interface SearchFilters {
-  person?: string;
-  type?: string;
-  team?: string;
-  tag?: string;
-  since?: string; // ISO date inclusive
-  until?: string; // ISO date inclusive
-  /** Scope to entries that are MEMBERS of this graph; undefined = all graphs. */
-  graph?: GraphId;
-}
-
-export type QueryOrigin = "primary" | "agent" | "cli";
-
-export interface QuerySpec {
-  text: string;
-  origin: QueryOrigin;
-  weight: number;
-}
-
-export type SearchCompleteness = "auto" | "complete" | "complete-if-small" | "none";
-
 export interface SearchHitReason {
   semanticRank?: number;
   lexicalRank?: number;
@@ -278,75 +277,16 @@ export interface SearchResult {
   report: SearchReport;
 }
 
-function matchesFilters(e: MemoryEntry, f: SearchFilters): boolean {
-  if (f.person && !e.people.includes(f.person)) return false;
-  if (f.team && !e.teams.includes(f.team)) return false;
-  if (f.tag && !e.tags.includes(f.tag)) return false;
-  if (f.type && e.type !== f.type) return false;
-  if (f.since && e.date < f.since) return false;
-  if (f.until && e.date > f.until) return false;
-  if (f.graph && !e.graphs.includes(f.graph)) return false;
-  return true;
-}
-
-/** Shared metadata filter — the single JS authority over the source of truth. */
-export function applyFilters(entries: MemoryEntry[], f: SearchFilters): MemoryEntry[] {
-  return entries.filter((e) => matchesFilters(e, f));
-}
-
-function hasAnyFilter(f: SearchFilters): boolean {
-  return Boolean(f.person || f.team || f.tag || f.type || f.since || f.until || f.graph);
-}
-
-const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/**
- * SQL prefilter mirroring `matchesFilters`, so vector-search truncation
- * happens INSIDE the filtered candidate space. Values failing validation are
- * skipped here (never interpolated); `matchesFilters` still enforces them.
- */
-function whereClause(f: SearchFilters): string | undefined {
-  const parts: string[] = [];
-  if (f.type && SLUG_RE.test(f.type)) parts.push(`type = '${f.type}'`);
-  if (f.since && DATE_RE.test(f.since)) parts.push(`date >= '${f.since}'`);
-  if (f.until && DATE_RE.test(f.until)) parts.push(`date <= '${f.until}'`);
-  if (f.person && SLUG_RE.test(f.person)) parts.push(`people LIKE '%|${f.person}|%'`);
-  if (f.team && SLUG_RE.test(f.team)) parts.push(`teams LIKE '%|${f.team}|%'`);
-  if (f.tag && SLUG_RE.test(f.tag)) parts.push(`tags LIKE '%|${f.tag}|%'`);
-  if (f.graph && SLUG_RE.test(f.graph)) parts.push(`graphs LIKE '%|${f.graph}|%'`);
-  return parts.length ? parts.join(" AND ") : undefined;
-}
-
-function rankToRRF(ids: string[], k0 = 60): Map<string, number> {
-  const m = new Map<string, number>();
-  ids.forEach((id, i) => m.set(id, 1 / (k0 + i + 1)));
-  return m;
-}
-
-interface RankList {
-  kind: "semantic" | "lexical";
-  query: QuerySpec;
-  ids: string[];
-}
-
 export interface SearchOptions {
   /** Recall-over-precision preset: wider candidate pools (callers also raise k). */
   deep?: boolean;
   completeness?: SearchCompleteness;
   completeLimit?: number;
+  /** Clock for the recency bonus (default: wall clock). Fixed by the eval harness. */
+  now?: number;
+  /** Per-run ranking overrides (harness sweeps); env MEMORY_RANK_* still applies. */
+  tunables?: Partial<RankingTunables>;
 }
-
-/**
- * Filtered result sets at or below this size take the exhaustive path: every
- * matching entry enters the ranking, so a filtered query cannot miss — only
- * order (and `k`) limits what is printed.
- */
-const EXHAUSTIVE_LIMIT = 200;
-
-/** Max recency multiplier bonus (2%) and its e-folding age in days. */
-const RECENCY_EPS = 0.02;
-const RECENCY_DECAY_DAYS = 90;
 
 export const DEFAULT_COMPLETE_LIMIT = EXHAUSTIVE_LIMIT;
 
@@ -359,31 +299,6 @@ function querySpecs(queries: string[] | QuerySpec[]): QuerySpec[] {
     )
     .map((q) => ({ ...q, text: q.text.trim(), weight: Number.isFinite(q.weight) ? q.weight : 1 }))
     .filter((q) => q.text && q.weight > 0);
-}
-
-function shouldExhaustivelyAppend(
-  filters: SearchFilters,
-  candidateCount: number,
-  completeness: SearchCompleteness,
-  completeLimit: number,
-): boolean {
-  if (candidateCount === 0) return false;
-  if (completeness === "complete") return true;
-  if (completeness === "complete-if-small") return candidateCount <= completeLimit;
-  if (completeness === "auto") return hasAnyFilter(filters) && candidateCount <= completeLimit;
-  return false;
-}
-
-function bestRank(lists: RankList[], id: string, kind: RankList["kind"]): number | undefined {
-  let best: number | undefined;
-  for (const list of lists) {
-    if (list.kind !== kind) continue;
-    const rank = list.ids.indexOf(id);
-    if (rank === -1) continue;
-    const oneBased = rank + 1;
-    if (best === undefined || oneBased < best) best = oneBased;
-  }
-  return best;
 }
 
 function matchedTerms(entry: MemoryEntry, qs: QuerySpec[]): string[] {
@@ -413,6 +328,8 @@ export async function searchDetailed(
   const qs = querySpecs(queries);
   const completeness = opts.completeness ?? "auto";
   const completeLimit = opts.completeLimit ?? DEFAULT_COMPLETE_LIMIT;
+  const tunables = resolveTunables(opts.tunables);
+  const now = opts.now ?? Date.now();
   if (qs.length === 0) {
     return {
       queries: [],
@@ -435,6 +352,7 @@ export async function searchDetailed(
 
   const entries = await loadAllEntries();
   const byId = new Map(entries.map((e) => [e.id, e]));
+  const chainIndex = buildChainIndex(entries);
   const filtered = applyFilters(entries, filters);
   if (filtered.length === 0) {
     return {
@@ -461,13 +379,8 @@ export async function searchDetailed(
   const db = await lancedb.connect(INDEX_DIR);
   const table = await openTable(db);
 
-  // Candidate pool scales with the corpus so the vector leg's truncation
-  // horizon grows as the store does (the old fixed 40 was a recall ceiling).
   const chunkRows = table ? await table.countRows() : 0;
-  const mult = opts.deep ? 12 : 8;
-  const pool = exhaustive
-    ? Math.min(4096, Math.max(filtered.length * 8, 40))
-    : Math.min(512, Math.max(k * mult, 40, Math.ceil(chunkRows / 20)));
+  const pool = candidatePool({ exhaustive, filteredCount: filtered.length, k, deep: Boolean(opts.deep), chunkRows });
   const where = whereClause(filters);
 
   // --- semantic ranking lists, one per phrasing (best chunk per entry) ---
@@ -504,47 +417,11 @@ export async function searchDetailed(
     rankLists.push({ kind: "lexical", query: q, ids });
   }
 
-  // --- reciprocal rank fusion across all lists ---
-  const fused = new Map<string, number>();
-  for (const list of rankLists) {
-    for (const [id, s] of rankToRRF(list.ids)) {
-      fused.set(id, (fused.get(id) ?? 0) + s * list.query.weight);
-    }
-  }
-
-  // Mild recency boost: at most +2%, decaying over ~3 months of age (by
-  // max(date, updated)). Sized to break genuine near-ties toward the newer
-  // entry while staying below the ~0.3-1% adjacent-rank RRF gap × a few
-  // lists, so any entry with a real relevance lead is untouchable.
-  const now = Date.now();
-  for (const [id, score] of fused) {
-    const e = byId.get(id);
-    if (!e) continue;
-    const ref = e.updated && e.updated > e.date ? e.updated : e.date;
-    const ageDays = Math.max(0, (now - Date.parse(ref)) / 86_400_000);
-    fused.set(id, score * (1 + RECENCY_EPS * Math.exp(-ageDays / RECENCY_DECAY_DAYS)));
-  }
-
-  let ranked = [...fused.entries()]
-    .filter(([id]) => byId.has(id))
-    .sort((a, b) => b[1] - a[1])
-    .map(([id, score]) => ({ id, score }));
-  const retrievalSignalCount = ranked.length;
-
-  if (exhaustive) {
-    // Recall guarantee: append filter-matching entries with no retrieval
-    // signal (newest first) so nothing is droppable before the k-cut.
-    const present = new Set(ranked.map((r) => r.id));
-    const rest = filtered
-      .filter((e) => !present.has(e.id))
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .map((e) => ({ id: e.id, score: 0 }));
-    ranked = [...ranked, ...rest];
-  }
-
+  // --- fusion, recency, completeness append, k-cut: the pure pipeline ---
+  const ranked = rankCandidates({ rankLists, filtered, exhaustive, k }, tunables, now);
+  const { retrievalSignalCount, limitedByK } = ranked;
   const consideredCount = exhaustive ? filtered.length : retrievalSignalCount;
-  const chainIndex = buildChainIndex(entries);
-  const hits = ranked.slice(0, k).map(({ id, score }) => {
+  const hits = ranked.hits.map(({ id, score }) => {
     const entry = byId.get(id)!;
     const chain = chainIndex.get(id);
     const semanticRank = bestRank(rankLists, id, "semantic");
@@ -578,7 +455,7 @@ export async function searchDetailed(
       consideredCount,
       retrievalSignalCount,
       returnedCount: hits.length,
-      limitedByK: ranked.length > k,
+      limitedByK,
       k,
       pool,
       chunkRows,

@@ -12,28 +12,48 @@ export interface Embedder {
 const LOCAL_MODEL = process.env.MEMORY_EMBED_MODEL ?? "Xenova/bge-small-en-v1.5";
 const LOCAL_DIM = 384; // bge-small-en-v1.5
 
+/**
+ * Chunks per model call. One padded tensor per call keeps peak memory bounded
+ * (a whole-corpus re-embed would otherwise build a single [N, tokens] batch).
+ */
+export const EMBED_BATCH = 64;
+
+type Extractor = (
+  texts: string[],
+  opts: { pooling: "mean"; normalize: true },
+) => Promise<{ tolist(): number[][] }>;
+
+async function loadLocalExtractor(): Promise<Extractor> {
+  const { pipeline, env } = await import("@huggingface/transformers");
+  // Keep model cache inside the repo (gitignored) for reproducibility.
+  env.cacheDir = process.env.MEMORY_MODEL_CACHE ?? "./.cache/transformers";
+  return (await pipeline("feature-extraction", LOCAL_MODEL)) as unknown as Extractor;
+}
+
 /** Local in-process embedder using Transformers.js feature-extraction. */
-class LocalEmbedder implements Embedder {
+export class LocalEmbedder implements Embedder {
   readonly id = `local:${LOCAL_MODEL}`;
   readonly dim = LOCAL_DIM;
-  private extractor: Promise<any> | null = null;
+  private extractor: Promise<Extractor> | null = null;
 
-  private async pipe() {
-    if (!this.extractor) {
-      const { pipeline, env } = await import("@huggingface/transformers");
-      // Keep model cache inside the repo (gitignored) for reproducibility.
-      env.cacheDir = process.env.MEMORY_MODEL_CACHE ?? "./.cache/transformers";
-      this.extractor = pipeline("feature-extraction", LOCAL_MODEL);
-    }
+  /** `load` is injectable so tests can exercise batching without a model. */
+  constructor(private readonly load: () => Promise<Extractor> = loadLocalExtractor) {}
+
+  private pipe(): Promise<Extractor> {
+    if (!this.extractor) this.extractor = this.load();
     return this.extractor;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     const extractor = await this.pipe();
-    const out = await extractor(texts, { pooling: "mean", normalize: true });
-    // out is a Tensor [n, dim]; tolist() -> number[][]
-    return out.tolist() as number[][];
+    const out: number[][] = [];
+    for (let i = 0; i < texts.length; i += EMBED_BATCH) {
+      const t = await extractor(texts.slice(i, i + EMBED_BATCH), { pooling: "mean", normalize: true });
+      // t is a Tensor [n, dim]; tolist() -> number[][]
+      out.push(...t.tolist());
+    }
+    return out;
   }
 }
 
