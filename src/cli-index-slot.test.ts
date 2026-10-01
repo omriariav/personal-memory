@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO, STORE_MOD, runInStore, seedStore } from "./test-store.js";
@@ -24,6 +24,45 @@ function cliStderr(cwd: string, args: string[], env: Record<string, string> = {}
   }
   throw new Error(`expected \`${args.join(" ")}\` to fail, but it succeeded`);
 }
+
+/** Both streams of one CLI run — the resolver warning goes to stderr while the answer goes to stdout. */
+function cliBoth(cwd: string, args: string[], env: Record<string, string> = {}): { stdout: string; stderr: string } {
+  const r = spawnSync(process.execPath, ["--import", join(REPO, "node_modules", "tsx", "dist", "loader.mjs"), join(REPO, "src", "cli.ts"), ...args], {
+    cwd,
+    env: { ...process.env, MEMORY_EMBEDDINGS: "fake", ...env },
+    encoding: "utf8",
+  });
+  assert.equal(r.status, 0, `\`${args.join(" ")}\` failed: ${r.stderr}`);
+  return { stdout: r.stdout, stderr: r.stderr };
+}
+
+test("active.json naming a missing slot: recall still answers, and the fallback is announced once on stderr", { timeout: 300_000 }, () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-cli-gone-"));
+  try {
+    seedStore(root);
+    runInStore(root, `const s = await import(${STORE_MOD}); const r = await s.syncIndex(); console.log(JSON.stringify(r.slots.map((x) => x.slot)));`, {
+      MEMORY_INDEX_SLOT: "legacy",
+    });
+    // The failure a restore produces: active.json survives, its slot does not.
+    writeFileSync(join(root, ".index", "active.json"), JSON.stringify({ slot: "gone" }), "utf8");
+
+    const run = cliBoth(root, ["recall", "otter hiring", "--format", "json"]);
+    const report = JSON.parse(run.stdout);
+    assert.equal(report.index.slot, "legacy", "the read falls back to the legacy root rather than failing");
+    assert.ok(report.hits.length > 0, "and still answers from it");
+    assert.match(run.stderr, /⚠ active\.json names slot 'gone'/, "stderr carries the warning the resolver returned");
+    assert.match(run.stderr, /index --build gone/, "and the command that would rebuild the missing slot");
+
+    const quiet = cliBoth(root, ["recall", "otter hiring", "--format", "json"], { MEMORY_QUIET: "1" });
+    assert.ok(!/active\.json names slot/.test(quiet.stderr), `MEMORY_QUIET=1 silences it: ${quiet.stderr}`);
+
+    // A WRITE resolves the same way and must announce it too, not acquire a slot quietly.
+    const added = cliBoth(root, ["add", "--type", "note", "--title", "Fallback note", "--body", "written while active.json dangles"]);
+    assert.match(added.stderr, /⚠ active\.json names slot 'gone'/, "the write path announces the fallback as well");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("recall --index-slot: selects the slot, JSON reports it, unknown slot is a clear error", { timeout: 300_000 }, () => {
   const root = mkdtempSync(join(tmpdir(), "pm-cli-slot-"));

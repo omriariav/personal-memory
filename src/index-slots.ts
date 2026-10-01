@@ -202,15 +202,37 @@ export function resolveIndexSlotDetailed(
     if (slotExists(active.slot, root)) {
       return { slot: active.slot, dir: slotDir(active.slot, root), format: slotFormat(active.slot), source: "active" };
     }
+    // The fallback is the ordinary default, never a hard-coded legacy root: a
+    // store that never had one would otherwise acquire a format-1 root on its
+    // next write just because `active.json` outlived the slot it named.
+    const fallback = defaultSlot(root);
+    const where = fallback.slot === LEGACY_SLOT ? "the legacy root index" : `slot '${fallback.slot}'`;
     return {
-      slot: LEGACY_SLOT,
-      dir: root,
-      format: 1,
-      source: "default",
-      warning: `active.json names slot '${active.slot}' which is missing on disk — using the legacy root index (rebuild with: npx tsx src/cli.ts index --build ${active.slot})`,
+      ...fallback,
+      warning: `active.json names slot '${active.slot}' which is missing on disk — using ${where} (rebuild with: npx tsx src/cli.ts index --build ${active.slot})`,
     };
   }
   return defaultSlot(root);
+}
+
+/**
+ * Print a resolution's `warning` to stderr, at most once per process.
+ *
+ * The slot a read answers from silently changing is exactly the failure a
+ * restore produces (`active.json` kept, `slots/` dropped), so every entry
+ * point that resolves a slot says so — but once, not on every query of a
+ * long-running process. `MEMORY_QUIET=1` silences it like any other note.
+ */
+let warnedResolution: string | null = null;
+export function warnResolution(r: SlotResolution): void {
+  if (!r.warning || warnedResolution === r.warning) return;
+  warnedResolution = r.warning;
+  if (process.env.MEMORY_QUIET !== "1") console.error(`⚠ ${r.warning}`);
+}
+
+/** Test seam: forget what has already been warned about. */
+export function resetResolutionWarning(): void {
+  warnedResolution = null;
 }
 
 /**

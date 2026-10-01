@@ -5,7 +5,7 @@ import { ensureLexical, bm25Scores, type LexicalIndex } from "./lexical.js";
 import { applyFilters, type Filterable, type SearchFilters } from "./ranking.js";
 import type { ChainSource } from "./chains.js";
 import type { MemoryEntry, MemoryType } from "./schema.js";
-import { META_FILENAME, resolveIndexSlotDetailed } from "./index-slots.js";
+import { META_FILENAME, resolveIndexSlotDetailed, warnResolution } from "./index-slots.js";
 
 /**
  * The one read seam over an index slot. `LegacyCatalog` wraps today's
@@ -306,6 +306,7 @@ export class EmptyCatalog implements Catalog {
  */
 export async function openCatalog(opts: { slot?: string } = {}): Promise<Catalog> {
   const r = resolveIndexSlotDetailed(opts.slot ? { override: opts.slot } : {});
+  warnResolution(r);
   if (r.format === 1) return new LegacyCatalog(r.slot, r.dir);
   if (!existsSync(join(r.dir, META_FILENAME))) {
     if (await hasAnyEntryFile()) throw new MissingIndexError(r.slot);

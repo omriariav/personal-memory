@@ -16,6 +16,7 @@ import {
   resolveIndexSlotDetailed,
   slotDir,
   slotFormat,
+  warnResolution,
   writeActive,
   type IndexMeta,
   type SlotMeta,
@@ -495,6 +496,7 @@ export async function syncIndex(
  */
 export async function openCatalogForWrite(slot?: string): Promise<Catalog> {
   const r = resolveIndexSlotDetailed(slot ? { override: slot } : {});
+  warnResolution(r);
   if (r.format === 2 && !existsSync(metaPath(r.dir)) && (await hasAnyEntryFile())) {
     await syncIndex();
   }

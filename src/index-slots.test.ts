@@ -11,8 +11,10 @@ import {
   listSlots,
   readActiveSync,
   readIndexMetaSync,
+  resetResolutionWarning,
   resolveIndexSlotDetailed,
   slotDir,
+  warnResolution,
   writeActive,
 } from "./index-slots.js";
 
@@ -75,20 +77,66 @@ test("resolution: override beats env beats active.json; all resolve to the slot 
   }
 });
 
-test("resolution: 'previous' resolves active.previous; active.json pointing at a missing slot falls back to legacy with a warning", () => {
+test("resolution: 'previous' resolves active.previous; active.json pointing at a missing slot falls back to the DEFAULT slot with a warning", () => {
   const root = tempRoot();
   try {
     mkSlot(root, "next");
+    writeFileSync(join(root, "meta.json"), JSON.stringify({ embedderId: "fake:hashed-bag", dim: 64, indexVersion: 6 }));
     writeFileSync(join(root, "active.json"), JSON.stringify({ slot: "next", previous: "legacy" }));
     const prev = resolveIndexSlotDetailed({ root, env: {}, override: "previous" });
     assert.deepEqual([prev.slot, prev.source], [LEGACY_SLOT, "previous"]);
     writeFileSync(join(root, "active.json"), JSON.stringify({ slot: "gone" }));
     const fallback = resolveIndexSlotDetailed({ root, env: {} });
-    assert.equal(fallback.slot, LEGACY_SLOT);
+    assert.equal(fallback.slot, LEGACY_SLOT, "a store WITH a legacy root index falls back to it");
     assert.match(fallback.warning ?? "", /active\.json names slot 'gone'/);
     assert.throws(() => resolveIndexSlotDetailed({ root, env: {}, override: "previous" }), /no previous index slot/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolution: the missing-slot fallback is defaultSlot, so a store with no legacy root lands on the fresh slot, not a format-1 root", () => {
+  const root = tempRoot();
+  try {
+    // No root meta.json and no memory.lance: this store never had a legacy index.
+    writeFileSync(join(root, "active.json"), JSON.stringify({ slot: "gone" }));
+    const fallback = resolveIndexSlotDetailed({ root, env: {} });
+    assert.deepEqual(
+      [fallback.slot, fallback.format, fallback.dir],
+      ["main", 2, join(root, "slots", "main")],
+      "falling back to the legacy root here would give the store a format-1 index on its next write",
+    );
+    assert.match(fallback.warning ?? "", /names slot 'gone'.*using slot 'main'/s, "the warning names the slot actually used");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolution: warnResolution prints the warning to stderr once per process, and never under MEMORY_QUIET=1", () => {
+  const lines: string[] = [];
+  const realError = console.error;
+  const realQuiet = process.env.MEMORY_QUIET;
+  console.error = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  try {
+    resetResolutionWarning();
+    const r = { slot: "legacy", dir: "/x", format: 1 as const, source: "default" as const, warning: "active.json names slot 'gone'" };
+    delete process.env.MEMORY_QUIET;
+    warnResolution(r);
+    warnResolution(r);
+    assert.deepEqual(lines, ["⚠ active.json names slot 'gone'"], "printed exactly once");
+    resetResolutionWarning();
+    process.env.MEMORY_QUIET = "1";
+    warnResolution(r);
+    assert.equal(lines.length, 1, "MEMORY_QUIET=1 silences it");
+    resetResolutionWarning();
+    delete process.env.MEMORY_QUIET;
+    warnResolution({ slot: "legacy", dir: "/x", format: 1, source: "default" });
+    assert.equal(lines.length, 1, "a resolution with no warning prints nothing");
+  } finally {
+    console.error = realError;
+    if (realQuiet === undefined) delete process.env.MEMORY_QUIET;
+    else process.env.MEMORY_QUIET = realQuiet;
+    resetResolutionWarning();
   }
 });
 
