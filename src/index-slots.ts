@@ -71,7 +71,7 @@ export const CatalogManifestSchema = z
   .object({
     catalogVersion: z.number().int(),
     generation: z.number().int().nonnegative(),
-    /** store-relative dir → mtimeMs, for the read-path freshness check. */
+    /** root-relative dir → mtimeMs (scanDirMtimes), for the read-path freshness check. */
     dirs: z.record(z.string(), z.number()),
     N: z.number().int().nonnegative(),
     avgdl: z.number().nonnegative(),

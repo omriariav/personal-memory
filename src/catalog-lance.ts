@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import matter from "gray-matter";
 import * as lancedb from "@lancedb/lancedb";
 import { lexicalMode, type Catalog, type CatalogEntryMeta, type LexicalHit, type LexicalMode } from "./catalog.js";
-import { META_COLUMNS, likeLiteral, metaFromRow, openCatalogTables, sqlList, syncCatalogFromDisk } from "./catalog-sync.js";
+import { META_COLUMNS, likeLiteral, metaFromRow, openCatalogTables, readManifest, scanDirMtimes, sqlList, syncCatalogFromDisk } from "./catalog-sync.js";
 import { ROOT } from "./ingest.js";
 import { listGraphStores, type Store } from "./graphs.js";
 import { bm25Scores, buildLexicalFromTokens, tokenize, type LexicalIndex } from "./lexical.js";
@@ -11,6 +11,9 @@ import type { ChainSource } from "./chains.js";
 import { FrontmatterSchema, type CatalogEntryRow, type MemoryEntry } from "./schema.js";
 
 type MetaRow = Omit<CatalogEntryRow, "lex">;
+
+/** See refresh(): sub-ms mtime noise (filesystem clock, a Date round-trip) never counts as a change. */
+const MTIME_EPSILON_MS = 5;
 
 /** Reads a new-format slot's `entries` table; bodies are read from disk only for hits. */
 export class LanceCatalog implements Catalog {
@@ -152,12 +155,39 @@ export class LanceCatalog implements Catalog {
     return rows.filter((r) => allowed.has(r.id)).map((r) => ({ id: r.id, score: r._score }));
   }
 
-  /** Task 8 adds the manifest/dir-mtime policy; until then: build the tables when they are missing. */
+  /**
+   * Freshness: a missing catalog or manifest is built from disk; otherwise
+   * ~60 directory stats are compared with the manifest (MEMORY_SYNC=strict
+   * skips the comparison and always re-syncs). In-place edits of an existing
+   * file do not change its directory's mtime — writers sync after their own
+   * writes, `memory index` and strict mode cover hand edits.
+   */
   async refresh(): Promise<{ refreshed: boolean }> {
-    if (this.table) return { refreshed: false };
+    const manifest = await readManifest(this.dir);
+    let stale = !this.table || !manifest || process.env.MEMORY_SYNC === "strict";
+    if (!stale && manifest) {
+      const dirs = await scanDirMtimes(this.stores, this.root);
+      const keys = new Set([...Object.keys(dirs), ...Object.keys(manifest.dirs)]);
+      for (const k of keys) {
+        const a = dirs[k];
+        const b = manifest.dirs[k];
+        // A dir appearing/disappearing (key only on one side) is always
+        // stale. Otherwise tolerate MTIME_EPSILON_MS: `Date` has no
+        // sub-millisecond resolution, so anything that round-trips a stored
+        // mtime through one (a hand-reset mtime, a coarser filesystem clock)
+        // can read back a few tenths of a ms off with no real change —
+        // negligible next to a genuine mutation's multi-ms-or-more gap.
+        if (a === undefined || b === undefined || Math.abs(a - b) > MTIME_EPSILON_MS) {
+          stale = true;
+          break;
+        }
+      }
+    }
+    if (!stale) return { refreshed: false };
     await syncCatalogFromDisk(this.db, this.dir, { root: this.root, stores: this.stores });
     this.table = (await openCatalogTables(this.db)).entries;
     this.postings = null;
+    if (process.env.MEMORY_QUIET !== "1") console.error(`↻ catalog refreshed (${this.slot})`);
     return { refreshed: true };
   }
 }

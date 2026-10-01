@@ -184,7 +184,12 @@ export async function dropCatalogTables(db: lancedb.Connection): Promise<void> {
   for (const name of [ENTRIES_TABLE, FILES_TABLE]) if (names.includes(name)) await db.dropTable(name);
 }
 
-/** mtimeMs of every entries/, entries/YYYY, entries/YYYY/MM and summaries/ dir per store (store-relative keys). */
+/**
+ * mtimeMs of every entries/, entries/YYYY, entries/YYYY/MM and summaries/ dir
+ * per store, keyed ROOT-relative (relative(root, dir), not store-relative).
+ * Only entries/ is recursed two levels deep; summaries/ subdirectories (none
+ * exist today) are not walked.
+ */
 export async function scanDirMtimes(stores: Pick<Store, "entriesDir" | "summariesDir">[], root: string): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
   const record = async (dir: string) => {
