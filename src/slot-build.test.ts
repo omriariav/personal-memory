@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { PRESERVED_SIDECARS } from "./index-slots.js";
-import { defaultBuildName } from "./slot-build.js";
+import { BUILD_BATCH_ENTRIES, defaultBuildName } from "./slot-build.js";
 import { REPO, STORE_MOD, md, runInStore, seedStore } from "./test-store.js";
 
 const BUILD_MOD = JSON.stringify(join(REPO, "src", "slot-build.ts"));
@@ -123,6 +123,49 @@ test("index --build: with the header leg enabled, header rows are written and th
     const slotDir = join(root, ".index", "slots", "next");
     assert.ok(existsSync(join(slotDir, "memory_headers.lance")), "header table written");
     assert.equal(JSON.parse(readFileSync(join(slotDir, "meta.json"), "utf8")).headerTable, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("index --build: a corpus larger than one write batch lands every row, still re-embedding nothing", { timeout: 600_000 }, () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-build-batch-")));
+  const headerLeg = { MEMORY_RANK_HEADER_LEG_WEIGHT: "1" };
+  try {
+    // One more entry than a batch holds, so the table is created from the
+    // first batch and the rest arrive through `add`.
+    const n = BUILD_BATCH_ENTRIES + 20;
+    const entries = Array.from({ length: n }, (_, i) => ({
+      id: `2026-02-${String((i % 28) + 1).padStart(2, "0")}-batch-${String(i).padStart(4, "0")}`,
+      date: `2026-02-${String((i % 28) + 1).padStart(2, "0")}`,
+      type: "note",
+      title: `Batch note ${i}`,
+      body: `short body number ${i}`,
+    }));
+    seedStore(root, entries);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { ...headerLeg, MEMORY_INDEX_SLOT: "legacy" });
+    runInStore(root, `const s = await import(${STORE_MOD}); let r; do { r = await s.backfillHeaders({ batch: 2000 }); } while (r.remaining > 0); console.log(JSON.stringify(r));`, { ...headerLeg, MEMORY_INDEX_SLOT: "legacy" });
+
+    const out = runInStore(
+      root,
+      `${COUNTING_EMBEDDER}
+       const b = await import(${BUILD_MOD});
+       const r = await b.buildSlot({ name: "next", embedder });
+       const rows = {};
+       for (const t of ["memory", "memory_headers", "entries"]) rows[t] = await b.countSlotRows(r.dir, t);
+       console.log(JSON.stringify({ r, embeddedTexts, rows }));`,
+      headerLeg,
+    ) as { r: Record<string, number>; embeddedTexts: number; rows: Record<string, number> };
+
+    assert.equal(out.r.entries, n, "every entry is in the build");
+    assert.ok(out.r.chunks > BUILD_BATCH_ENTRIES, `the build must span more than one batch (chunks=${out.r.chunks})`);
+    assert.equal(out.rows.memory, out.r.chunks, "the chunk table holds exactly the reported rows — no batch dropped");
+    assert.equal(out.rows.memory_headers, out.r.headers, "the header table holds exactly the reported rows");
+    assert.equal(out.r.headers, n, "one header row per entry across batches");
+    assert.equal(out.rows.entries, n, "the catalog table holds one row per entry");
+    assert.equal(out.r.embedded, 0, "batching must not lose the reuse map — nothing is re-embedded");
+    assert.equal(out.embeddedTexts, 0, "and the embedder was never called");
+    assert.equal(out.r.vectorsReused, out.r.chunks, "every chunk vector was copied");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

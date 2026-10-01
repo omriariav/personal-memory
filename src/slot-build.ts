@@ -29,6 +29,7 @@ import {
 } from "./index-slots.js";
 import { ENTRIES_TABLE, ensureCatalogIndices, manifestFor, readManifest, scanDirMtimes, syncCatalogTables, writeManifest } from "./catalog-sync.js";
 import { readLexical } from "./lexical.js";
+import type { MemoryEntry } from "./schema.js";
 import {
   HEADERS_TABLE,
   INDEX_VERSION,
@@ -119,6 +120,37 @@ async function reusableVectors(
   return out;
 }
 
+/**
+ * Entries per batch of rows handed to LanceDB. A chunked entry yields a few
+ * rows, so this is ~1–2k rows per write: enough for the Arrow conversion to
+ * stay amortized, small enough that a 100k-entry build never holds the whole
+ * corpus' vectors in JS memory at once.
+ */
+export const BUILD_BATCH_ENTRIES = 500;
+
+/**
+ * Write `entries` into `<table>` a batch at a time: the first non-empty batch
+ * creates the table (LanceDB infers the schema from it), the rest are appended.
+ * Returns the total rows written. Nothing is created for an empty corpus.
+ */
+async function writeInBatches(
+  db: lancedb.Connection,
+  table: string,
+  entries: MemoryEntry[],
+  rowsFor: (batch: MemoryEntry[]) => Promise<unknown[]>,
+): Promise<number> {
+  let written = 0;
+  let handle: lancedb.Table | null = null;
+  for (let i = 0; i < entries.length; i += BUILD_BATCH_ENTRIES) {
+    const rows = (await rowsFor(entries.slice(i, i + BUILD_BATCH_ENTRIES))) as Record<string, unknown>[];
+    if (rows.length === 0) continue;
+    if (!handle) handle = await db.createTable(table, rows);
+    else await handle.add(rows);
+    written += rows.length;
+  }
+  return written;
+}
+
 export async function buildSlot(
   opts: { name?: string; dryRun?: boolean; force?: boolean; embedder?: Embedder; root?: string } = {},
 ): Promise<BuildReport> {
@@ -176,21 +208,28 @@ export async function buildSlot(
 
   // Counted inside the callback `recordsFor` actually calls, so the reported
   // `embedded` can never disagree with what the embedder was asked for.
+  // Each row key is asked for exactly once, so a consumed vector is dropped
+  // from the reuse map: without that the whole corpus' vectors would be held
+  // twice over, once in the map and once in the rows about to be written.
   let vectorsReused = 0;
   const reuseChunk: VectorSource = (rowId) => {
     const vector = chunkVectors.get(rowId);
-    if (vector) vectorsReused++;
+    if (vector) {
+      vectorsReused++;
+      chunkVectors.delete(rowId);
+    }
     return vector;
   };
-  const chunkRows = entries.length ? ((await recordsFor(entries, embedder, reuseChunk)) as unknown as Record<string, unknown>[]) : [];
-  if (chunkRows.length > 0) await db.createTable(TABLE, chunkRows);
+  const chunks = await writeInBatches(db, TABLE, entries, (batch) => recordsFor(batch, embedder, reuseChunk));
 
   let headers = 0;
   if (headersWanted && entries.length > 0) {
-    const reuseHeader: VectorSource = (id) => headerVectors.get(id);
-    const headerRows = (await headerRecordsFor(entries, embedder, reuseHeader)) as unknown as Record<string, unknown>[];
-    if (headerRows.length > 0) await db.createTable(HEADERS_TABLE, headerRows);
-    headers = headerRows.length;
+    const reuseHeader: VectorSource = (id) => {
+      const vector = headerVectors.get(id);
+      if (vector) headerVectors.delete(id);
+      return vector;
+    };
+    headers = await writeInBatches(db, HEADERS_TABLE, entries, (batch) => headerRecordsFor(batch, embedder, reuseHeader));
   }
 
   await syncCatalogTables(db, entries, { root: ROOT });
@@ -216,9 +255,9 @@ export async function buildSlot(
     slot: name,
     dir,
     entries: entries.length,
-    chunks: chunkRows.length,
+    chunks,
     vectorsReused,
-    embedded: chunkRows.length - vectorsReused,
+    embedded: chunks - vectorsReused,
     headers,
     dryRun: false,
   });
@@ -338,7 +377,7 @@ export interface SlotStatusRow {
 }
 
 /** Row count of one table, or null when the table is absent or unreadable. */
-async function countRows(dir: string, table: string): Promise<number | null> {
+export async function countSlotRows(dir: string, table: string): Promise<number | null> {
   try {
     const db = await lancedb.connect(dir);
     if (!(await db.tableNames()).includes(table)) return null;
@@ -367,7 +406,7 @@ export async function slotStatus(root: string = INDEX_ROOT): Promise<SlotStatusR
         lastSync = null;
       }
     } else if (s.built) {
-      entries = await countRows(s.dir, ENTRIES_TABLE);
+      entries = await countSlotRows(s.dir, ENTRIES_TABLE);
       lastSync = (await readManifest(s.dir))?.syncedAt ?? null;
     }
     rows.push({
@@ -378,7 +417,7 @@ export async function slotStatus(root: string = INDEX_ROOT): Promise<SlotStatusR
       built: s.built,
       building: s.building,
       entries,
-      chunks: s.built ? await countRows(s.dir, TABLE) : null,
+      chunks: s.built ? await countSlotRows(s.dir, TABLE) : null,
       lastSync,
     });
   }
