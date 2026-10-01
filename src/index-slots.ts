@@ -210,7 +210,19 @@ export function resolveIndexSlotDetailed(
       warning: `active.json names slot '${active.slot}' which is missing on disk — using the legacy root index (rebuild with: npx tsx src/cli.ts index --build ${active.slot})`,
     };
   }
-  return { slot: LEGACY_SLOT, dir: root, format: 1, source: "default" };
+  return defaultSlot(root);
+}
+
+/**
+ * With nothing chosen: the legacy root when it holds an index, otherwise the
+ * fresh new-format slot. A store with no `.index/` at all has no legacy
+ * artifacts to stay compatible with, so it starts on the current format
+ * directly instead of building a format-1 root it would have to migrate.
+ */
+function defaultSlot(root: string): SlotResolution {
+  const legacyIndexPresent = existsSync(join(root, META_FILENAME)) || existsSync(join(root, "memory.lance"));
+  if (legacyIndexPresent) return { slot: LEGACY_SLOT, dir: root, format: 1, source: "default" };
+  return { slot: FRESH_SLOT, dir: slotDir(FRESH_SLOT, root), format: 2, source: "default" };
 }
 
 export function resolveIndexSlot(opts?: Parameters<typeof resolveIndexSlotDetailed>[0]): string {
@@ -235,7 +247,7 @@ export interface SlotInfo {
 
 export function listSlots(root: string = INDEX_ROOT): SlotInfo[] {
   const active = readActiveSync(root);
-  const current = active && slotExists(active.slot, root) ? active.slot : LEGACY_SLOT;
+  const current = active && slotExists(active.slot, root) ? active.slot : defaultSlot(root).slot;
   const rows: SlotInfo[] = [
     {
       name: LEGACY_SLOT,

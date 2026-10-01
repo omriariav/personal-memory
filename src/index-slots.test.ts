@@ -25,11 +25,25 @@ function mkSlot(root: string, name: string, meta: Record<string, unknown> = { fo
   writeFileSync(join(root, "slots", name, "meta.json"), JSON.stringify(meta));
 }
 
-test("resolution: no active.json and no env → the legacy root", () => {
+test("resolution: an existing root index with no active.json and no env → the legacy root", () => {
   const root = tempRoot();
   try {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "meta.json"), JSON.stringify({ embedderId: "fake:hashed-bag", dim: 64, indexVersion: 6 }));
     const r = resolveIndexSlotDetailed({ root, env: {} });
     assert.deepEqual(r, { slot: LEGACY_SLOT, dir: root, format: 1, source: "default" });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolution: a store with no index at all defaults to the fresh new-format slot 'main'; a root meta.json means legacy", () => {
+  const root = tempRoot();
+  try {
+    const fresh = resolveIndexSlotDetailed({ root, env: {} });
+    assert.deepEqual([fresh.slot, fresh.format, fresh.source, fresh.dir], ["main", 2, "default", join(root, "slots", "main")]);
+    writeFileSync(join(root, "meta.json"), JSON.stringify({ embedderId: "x", dim: 1, indexVersion: 6 }));
+    assert.equal(resolveIndexSlotDetailed({ root, env: {} }).slot, LEGACY_SLOT);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -97,7 +111,9 @@ test("active.json: atomic write round-trips; a corrupt file throws instead of si
 test("listSlots: legacy row reflects meta.json presence; built, building and active/previous flags", () => {
   const root = tempRoot();
   try {
-    assert.deepEqual(listSlots(root).map((s) => [s.name, s.built, s.active]), [[LEGACY_SLOT, false, true]]);
+    // Index-less store: nothing is built, and the resolver's fresh default
+    // ('main') has no row yet — so no row is the active one.
+    assert.deepEqual(listSlots(root).map((s) => [s.name, s.built, s.active]), [[LEGACY_SLOT, false, false]]);
     writeFileSync(join(root, "meta.json"), JSON.stringify({ embedderId: "fake:hashed-bag", dim: 64, indexVersion: 6 }));
     mkSlot(root, "next");
     mkdirSync(join(root, "slots", "later__building"), { recursive: true });

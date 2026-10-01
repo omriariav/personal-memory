@@ -31,6 +31,8 @@ export interface RecallOptions {
   /** Clock for the recency bonus (default: wall clock). Fixed by the eval harness. */
   now?: number;
   tunables?: SearchOptions["tunables"];
+  /** Explicit index slot (`--index-slot`); default: env/active.json. */
+  slot?: string;
 }
 
 export interface RecallHit {
@@ -84,6 +86,8 @@ export interface RecallReport {
   k: number;
   pool: number;
   chunkRows: number;
+  /** The index slot this recall read, and its format. */
+  index: { slot: string; format: 1 | 2 };
   /** Relative score cutoff outcome (never applied on exhaustive runs). */
   cutoff?: { tau: number; applied: boolean; dropped: number };
   /** People named in the question, resolved through memory/people/ aliases. */
@@ -115,6 +119,7 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
     ...(opts.tunables ? { tunables: opts.tunables } : {}),
     ...(opts.noCutoff ? { noCutoff: true } : {}),
     ...(opts.rerank !== undefined ? { rerank: opts.rerank } : {}),
+    ...(opts.slot ? { slot: opts.slot } : {}),
   });
 
   const warnings: string[] = [];
@@ -149,6 +154,7 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
     k: search.report.k,
     pool: search.report.pool,
     chunkRows: search.report.chunkRows,
+    index: search.report.index,
     ...(search.report.cutoff ? { cutoff: search.report.cutoff } : {}),
     ...(search.report.entities ? { entities: search.report.entities } : {}),
     ...(search.report.rerank ? { rerank: search.report.rerank } : {}),

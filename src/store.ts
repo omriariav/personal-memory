@@ -10,10 +10,12 @@ import {
   META_FILENAME,
   SlotMetaSchema,
   listBuiltSlots,
+  readActiveSync,
   readIndexMetaSync,
   resolveIndexSlotDetailed,
   slotDir,
   slotFormat,
+  writeActive,
   type IndexMeta,
   type SlotMeta,
   type SlotResolution,
@@ -27,8 +29,9 @@ import {
   syncCatalogTables,
   writeManifest,
 } from "./catalog-sync.js";
+import { openCatalog } from "./catalog.js";
 import { packSlugs, type GraphId, type MemoryEntry, type MemoryRecord } from "./schema.js";
-import { LEXICAL_PATH, ensureLexical, syncLexical, bm25Scores, tokenize } from "./lexical.js";
+import { LEXICAL_PATH, syncLexical, tokenize } from "./lexical.js";
 import { buildChainIndex, type ChainAnnotation } from "./chains.js";
 import {
   applyFilters,
@@ -53,7 +56,7 @@ import { detectPeople, getAliasIndex, type Detection } from "./people.js";
 /** Person slugs used by any entry — the alias index's implicit vocabulary. */
 export async function knownPeople(): Promise<Set<string>> {
   const people = new Set<string>();
-  for (const e of await loadAllEntries()) for (const p of e.people) people.add(p);
+  for (const m of await (await openCatalog()).all()) for (const p of m.people) people.add(p);
   return people;
 }
 
@@ -62,7 +65,7 @@ export async function knownPeople(): Promise<Set<string>> {
  * ubiquitous slugs (present in more than ENTITY_MAX_DF of candidates) ignored
  * so an omnipresent manager or tag never dominates.
  */
-function entityMatchesFor(slugs: string[], filtered: MemoryEntry[], maxDf: number): Map<string, number> {
+function entityMatchesFor(slugs: string[], filtered: Pick<MemoryEntry, "id" | "people">[], maxDf: number): Map<string, number> {
   const matches = new Map<string, number>();
   if (slugs.length === 0 || filtered.length === 0) return matches;
   const df = new Map<string, number>();
@@ -458,6 +461,11 @@ export async function syncIndex(
       slots.push({ slot, format: slotFormat(slot), added: 0, removed: 0, unchanged: 0, error });
     }
   }
+  // A fresh store took the new-format default implicitly. Now that the slot
+  // exists on disk, record it: from here on the choice is written down rather
+  // than re-derived from "the root looks empty".
+  if (active.source === "default" && active.format === 2 && !readActiveSync()) await writeActive({ slot: active.slot });
+
   const first = slots[0]!;
   return { added: first.added, removed: first.removed, unchanged: first.unchanged, slots };
 }
@@ -640,7 +648,11 @@ export interface SearchHit {
  * (people/teams/tags present in ≤ `maxDf` of the candidates — ubiquitous
  * slugs carry no signal). A ranking-time view only; nothing is persisted.
  */
-function rareEntityEdges(filtered: MemoryEntry[], minShared: number, maxDf: number): Map<string, string[]> {
+function rareEntityEdges(
+  filtered: Pick<MemoryEntry, "id" | "people" | "teams" | "tags">[],
+  minShared: number,
+  maxDf: number,
+): Map<string, string[]> {
   const n = filtered.length;
   const holders = new Map<string, string[]>();
   for (const e of filtered) {
@@ -668,7 +680,7 @@ function rareEntityEdges(filtered: MemoryEntry[], minShared: number, maxDf: numb
  * cites). Nothing inferred — only links a human or agent asserted.
  */
 function explicitEdges(
-  filtered: MemoryEntry[],
+  filtered: Pick<MemoryEntry, "id" | "sources">[],
   filteredIds: Set<string>,
   chainIndex: Map<string, ChainAnnotation>,
 ): Map<string, string[]> {
@@ -699,6 +711,8 @@ export interface SearchReport {
   k: number;
   pool: number;
   chunkRows: number;
+  /** The index slot this search read, and its format. */
+  index: { slot: string; format: 1 | 2 };
   /** Relative score cutoff outcome (never applied on exhaustive runs). */
   cutoff?: { tau: number; applied: boolean; dropped: number };
   /** People named in the question (resolved through memory/people/ aliases). */
@@ -726,6 +740,8 @@ export interface SearchOptions {
   noCutoff?: boolean;
   /** Re-score the top RERANK_N candidates with the local cross-encoder (`--rerank`, MEMORY_RERANK=1). */
   rerank?: boolean;
+  /** Explicit index slot (`--index-slot`); default: env/active.json. */
+  slot?: string;
 }
 
 export const DEFAULT_COMPLETE_LIMIT = EXHAUSTIVE_LIMIT;
@@ -770,6 +786,9 @@ export async function searchDetailed(
   const completeLimit = opts.completeLimit ?? DEFAULT_COMPLETE_LIMIT;
   const tunables = resolveTunables({ ...opts.tunables, ...(opts.noCutoff ? { CUTOFF_TAU: 0 } : {}) });
   const now = opts.now ?? Date.now();
+  // Opened before the early returns: every report names the slot it read.
+  const catalog = await openCatalog(opts.slot ? { slot: opts.slot } : {});
+  const index = { slot: catalog.slot, format: catalog.format };
   if (qs.length === 0) {
     return {
       queries: [],
@@ -786,14 +805,14 @@ export async function searchDetailed(
         k,
         pool: 0,
         chunkRows: 0,
+        index,
       },
     };
   }
 
-  const entries = await loadAllEntries();
-  const byId = new Map(entries.map((e) => [e.id, e]));
-  const chainIndex = buildChainIndex(entries);
-  const filtered = applyFilters(entries, filters);
+  const filtered = await catalog.filter(filters);
+  const metaById = new Map(filtered.map((m) => [m.id, m]));
+  const chainIndex = buildChainIndex(await catalog.linked());
   if (filtered.length === 0) {
     return {
       queries: qs,
@@ -810,13 +829,14 @@ export async function searchDetailed(
         k,
         pool: 0,
         chunkRows: 0,
+        index,
       },
     };
   }
   const filteredIds = new Set(filtered.map((e) => e.id));
   const exhaustive = shouldExhaustivelyAppend(filters, filtered.length, completeness, completeLimit);
 
-  const db = await lancedb.connect(indexDir());
+  const db = await lancedb.connect(catalog.dir);
   const table = await openTable(db);
 
   const chunkRows = table ? await table.countRows() : 0;
@@ -862,14 +882,11 @@ export async function searchDetailed(
   }
 
   // --- lexical ranking lists, one per phrasing, within the filtered set ---
-  const lexIdx = await ensureLexical(entries);
+  // `filters` is handed over as a SQL prefilter so an FTS backend spends its
+  // limit inside the filtered space; `filteredIds` remains the authority.
   for (const q of qs) {
-    const scores = bm25Scores(q.text, lexIdx);
-    const ids = [...scores.entries()]
-      .filter(([id]) => filteredIds.has(id))
-      .sort((a, b) => b[1] - a[1])
-      .map(([id]) => id);
-    rankLists.push({ kind: "lexical", query: q, ids });
+    const hits = await catalog.lexical(q.text, filteredIds, pool, filters);
+    rankLists.push({ kind: "lexical", query: q, ids: hits.map((h) => h.id) });
   }
 
   // --- fusion, recency, timeline, completeness append, k-cut: the pure pipeline ---
@@ -910,10 +927,10 @@ export async function searchDetailed(
     const wide = block.length < tunables.RERANK_N ? rankCandidates({ ...rankInput, k: tunables.RERANK_N }, tunables, now) : ranked;
     const candidates = wide.hits.filter((h) => h.score > 0).slice(0, tunables.RERANK_N);
     const t0 = performance.now();
-    const docs = candidates.map((h) => {
-      const e = byId.get(h.id)!;
-      return `${e.title}\n${displayChunkText(bestChunk.get(h.id) ?? e.body)}`.slice(0, tunables.RERANK_MAX_CHARS);
-    });
+    const docsEntries = await catalog.hydrate(candidates.map((h) => metaById.get(h.id)!));
+    const docs = docsEntries.map((e, i) =>
+      `${e.title}\n${displayChunkText(bestChunk.get(candidates[i]!.id) ?? e.body)}`.slice(0, tunables.RERANK_MAX_CHARS),
+    );
     const scores = await reranker.score(qs[0]!.text, docs);
     const rerankScores = new Map(candidates.map((h, i) => [h.id, scores[i]!]));
     ranked = rankCandidates({ ...rankInput, rerankScores }, tunables, now);
@@ -921,7 +938,10 @@ export async function searchDetailed(
   }
   const { retrievalSignalCount, limitedByK } = ranked;
   const consideredCount = exhaustive ? filtered.length : retrievalSignalCount;
-  const digests = digestAnnotations(ranked.hits.map(({ id }) => ({ id, sources: byId.get(id)?.sources })));
+  // Bodies are read once, for exactly the hits that are returned.
+  const hitEntries = await catalog.hydrate(ranked.hits.map((h) => metaById.get(h.id)!));
+  const byId = new Map(hitEntries.map((e) => [e.id, e]));
+  const digests = digestAnnotations(ranked.hits.map(({ id }) => ({ id, sources: metaById.get(id)?.sources })));
   const hits = ranked.hits.map(({ id, score, breakdown, spreadFrom }) => {
     const rerankScore = breakdown.rerank;
     const entry = byId.get(id)!;
@@ -974,6 +994,7 @@ export async function searchDetailed(
       k,
       pool,
       chunkRows,
+      index,
       cutoff: { tau: tunables.CUTOFF_TAU, ...ranked.cutoff },
       ...(detection ? { entities: { people: detection.slugs, ambiguous: detection.ambiguous } } : {}),
       ...(rerankReport ? { rerank: rerankReport } : {}),

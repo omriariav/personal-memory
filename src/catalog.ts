@@ -1,5 +1,5 @@
 import { loadAllEntries, hashEntry } from "./ingest.js";
-import { ensureLexical, bm25Scores } from "./lexical.js";
+import { ensureLexical, bm25Scores, type LexicalIndex } from "./lexical.js";
 import { applyFilters, type Filterable, type SearchFilters } from "./ranking.js";
 import type { ChainSource } from "./chains.js";
 import type { MemoryEntry } from "./schema.js";
@@ -103,6 +103,7 @@ export class LegacyCatalog implements Catalog {
   readonly kind = "legacy" as const;
   readonly format = 1 as const;
   private cache: Promise<MemoryEntry[]> | null = null;
+  private postings: Promise<LexicalIndex> | null = null;
 
   constructor(
     readonly slot: string,
@@ -185,9 +186,19 @@ export class LegacyCatalog implements Catalog {
     });
   }
 
+  /**
+   * `ensureLexical` re-reads and re-parses lexical.json on every call, so the
+   * index is memoized per catalog: one search asks for several phrasings and
+   * must pay that once, as it did before the seam existed.
+   */
+  private lexicalIndex(): Promise<LexicalIndex> {
+    if (!this.postings) this.postings = (async () => ensureLexical(await this.entries(), this.opts.lexicalPath))();
+    return this.postings;
+  }
+
   /** The postings scorer already sees every doc, so `_filters` buys it nothing. */
   async lexical(query: string, allowed: Set<string>, _limit: number, _filters?: SearchFilters): Promise<LexicalHit[]> {
-    const idx = await ensureLexical(await this.entries(), this.opts.lexicalPath);
+    const idx = await this.lexicalIndex();
     return [...bm25Scores(query, idx).entries()]
       .filter(([id]) => allowed.has(id))
       .sort((a, b) => b[1] - a[1])

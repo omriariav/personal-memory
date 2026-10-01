@@ -10,6 +10,12 @@ import { REPO, STORE_MOD, md, runInStore, seedStore } from "./test-store.js";
 
 const BUILD_MOD = JSON.stringify(join(REPO, "src", "slot-build.ts"));
 
+/**
+ * The seeding sync is pinned to `MEMORY_INDEX_SLOT=legacy`: these tests are
+ * about a new-format slot built BESIDE today's root index, and an index-less
+ * store would otherwise take the fresh new-format default.
+ */
+
 /** sha256 of every file under dir (recursive, sorted), skipping `skip` subdirs. */
 function treeHash(dir: string, skip: string[] = []): Record<string, string> {
   const out: Record<string, string> = {};
@@ -38,7 +44,7 @@ test("index --build next: reuses every vector, leaves the root slot untouched, p
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-build-")));
   try {
     seedStore(root);
-    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
     const indexRoot = join(root, ".index");
     for (const f of PRESERVED_SIDECARS) if (f !== "active.json") writeFileSync(join(indexRoot, f), `{"sidecar":"${f}"}`);
     const before = treeHash(indexRoot, ["slots"]);
@@ -79,7 +85,7 @@ test("index --build: a build that dies mid-way leaves only <slot>__building, whi
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-build-kill-")));
   try {
     seedStore(root);
-    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
     // one NEW entry, so the build must embed something — the throwing embedder dies there
     writeFileSync(join(root, "memory", "entries", "2026", "01", "2026-01-08-new-after-sync.md"), md({ id: "2026-01-08-new-after-sync", date: "2026-01-08", type: "note", title: "New after sync", people: [], teams: [], tags: [] }, "fresh body"));
     assert.throws(
@@ -106,7 +112,7 @@ test("index --build: with the header leg enabled, header rows are written and th
   const headerLeg = { MEMORY_RANK_HEADER_LEG_WEIGHT: "1" };
   try {
     seedStore(root);
-    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, headerLeg);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { ...headerLeg, MEMORY_INDEX_SLOT: "legacy" });
     const built = runInStore(
       root,
       `${COUNTING_EMBEDDER} const b = await import(${BUILD_MOD}); const r = await b.buildSlot({ name: "next", embedder }); console.log(JSON.stringify({ r, embeddedTexts }));`,
@@ -151,7 +157,7 @@ test("index --build with no slot name builds 'next' beside the existing index", 
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-build-noname-")));
   try {
     seedStore(root);
-    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
     const built = runInStore(root, `${COUNTING_EMBEDDER} const b = await import(${BUILD_MOD}); const r = await b.buildSlot({ embedder }); console.log(JSON.stringify(r));`) as Record<string, unknown>;
     assert.equal(built.slot, "next", "defaults to 'next' when the legacy root is already built");
     assert.ok(existsSync(join(root, ".index", "slots", "next", "meta.json")), "slot built under its default name");

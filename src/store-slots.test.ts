@@ -9,7 +9,15 @@ test("store resolves the index dir per call: default = legacy root; an unknown M
   const root = mkdtempSync(join(tmpdir(), "pm-store-slots-"));
   try {
     seedStore(root);
-    const status = runInStore(root, `const s = await import(${STORE_MOD}); await s.syncIndex(); console.log(JSON.stringify(await s.indexStatus()));`) as { slot: string; format: number; indexedEntries: number };
+    // The sync is pinned to the legacy slot (an index-less store would
+    // otherwise take the fresh new-format default); the status read is NOT,
+    // so it exercises the default resolution over the v6 root it just wrote.
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
+    const status = runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.indexStatus()));`) as {
+      slot: string;
+      format: number;
+      indexedEntries: number;
+    };
     assert.equal(status.slot, "legacy");
     assert.equal(status.format, 1);
     assert.equal(status.indexedEntries, 7);

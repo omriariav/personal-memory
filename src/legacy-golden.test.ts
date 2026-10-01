@@ -31,7 +31,7 @@ function record(root: string): unknown {
        const reports = [];
        for (const q of queries) reports.push(await recall(q.positionals, { ...q.opts, now: ${NOW} }));
        console.log(JSON.stringify(reports));`,
-      { MEMORY_RANK_PROFILE: profile },
+      { MEMORY_RANK_PROFILE: profile, MEMORY_INDEX_SLOT: "legacy" },
     );
   }
   return normalizeReport(out, root);
@@ -45,10 +45,20 @@ test("legacy slot: recall output is byte-identical to the recorded golden under 
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-golden-")));
   try {
     seedStore(root);
-    const sync = runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`) as { added: number };
+    const sync = runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, {
+      MEMORY_INDEX_SLOT: "legacy",
+    }) as { added: number };
     assert.equal(sync.added, 7);
     assert.equal(existsSync(join(root, ".index", "active.json")), false, "a plain sync never writes active.json");
     assert.equal(existsSync(join(root, ".index", "slots")), false, "a plain sync never creates slots/");
+    // The fixture the rest of this test reads is "a v6 .index with no
+    // active.json" — the compat (a) shape. Reads WITHOUT the env must still
+    // land on the legacy root.
+    assert.equal(
+      (runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.indexStatus()));`) as { slot: string }).slot,
+      "legacy",
+      "a v6 root index with no active.json is the legacy slot by default",
+    );
     const actual = record(root);
     if (process.env.UPDATE_GOLDEN === "1") {
       writeFileSync(FIXTURE, `${JSON.stringify(actual, null, 2)}\n`, "utf8");

@@ -9,6 +9,10 @@ import { REPO, STORE_MOD, md, runInStore, seedStore } from "./test-store.js";
  * Writers keep EVERY built slot in sync, not just the active one, so a `next`
  * slot under evaluation never drifts from the Markdown source of truth — and
  * a changed chunk is embedded exactly once no matter how many slots hold it.
+ *
+ * The seeding sync is pinned to `MEMORY_INDEX_SLOT=legacy`: the store under
+ * test is a legacy root with a `next` slot beside it, and an index-less store
+ * would otherwise take the fresh new-format default.
  */
 const BUILD_MOD = JSON.stringify(join(REPO, "src", "slot-build.ts"));
 const EMBED_MOD = JSON.stringify(join(REPO, "src", "embed.ts"));
@@ -32,7 +36,7 @@ test("syncIndex after --build next: one embedding pass feeds BOTH slots; the nex
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-sync-slots-")));
   try {
     seedStore(root);
-    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
     runInStore(root, `const b = await import(${BUILD_MOD}); console.log(JSON.stringify(await b.buildSlot({ name: "next" })));`);
     const dir = join(root, "memory", "entries", "2026", "01");
     writeFileSync(
@@ -79,7 +83,7 @@ test("syncIndex --rebuild on a format-2 active slot rebuilds the catalog without
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-sync-rebuild-")));
   try {
     seedStore(root);
-    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
     runInStore(root, `const b = await import(${BUILD_MOD}); console.log(JSON.stringify(await b.buildSlot({ name: "next" })));`);
     const r = runInStore(
       root,
@@ -104,7 +108,7 @@ test("syncIndex --rebuild on the legacy slot rebuilds lexical.json in place, wit
     (JSON.parse(readFileSync(lexicalPath, "utf8")) as { docs: (unknown | null)[] }).docs.filter((d) => d === null).length;
   try {
     seedStore(root);
-    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
     // A deleted entry leaves a tombstone an incremental sync keeps; only a
     // rebuild clears it, so this is what distinguishes the two paths.
     rmSync(join(root, "memory", "entries", "2026", "01", "2026-01-03-otter-hiring.md"));
@@ -132,7 +136,7 @@ test("syncIndex: a catalog version bump rebuilds the catalog tables and keeps ev
   const metaPath = join(nextDir, "meta.json");
   try {
     seedStore(root);
-    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
     runInStore(root, `const b = await import(${BUILD_MOD}); console.log(JSON.stringify(await b.buildSlot({ name: "next" })));`);
 
     // Corrupt one catalog row's pre-tokenized text while leaving its hash
@@ -183,7 +187,7 @@ test("syncIndex: a broken non-active slot is reported, never fatal to the write"
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-sync-broken-slot-")));
   try {
     seedStore(root);
-    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
     runInStore(root, `const b = await import(${BUILD_MOD}); console.log(JSON.stringify(await b.buildSlot({ name: "next" })));`);
     writeFileSync(join(root, ".index", "slots", "next", "meta.json"), "{ not json", "utf8");
     writeFileSync(

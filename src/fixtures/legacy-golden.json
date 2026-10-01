@@ -20,6 +20,10 @@
       "k": 5,
       "pool": 56,
       "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
       "cutoff": {
         "tau": 0.5,
         "applied": false,
@@ -292,6 +296,10 @@
       "k": 10,
       "pool": 40,
       "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
       "cutoff": {
         "tau": 0.5,
         "applied": false,
@@ -550,6 +558,10 @@
       "k": 5,
       "pool": 40,
       "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
       "cutoff": {
         "tau": 0.5,
         "applied": false,
@@ -618,6 +630,10 @@
       "k": 3,
       "pool": 40,
       "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
       "cutoff": {
         "tau": 0.5,
         "applied": false,
@@ -793,6 +809,10 @@
       "k": 5,
       "pool": 56,
       "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
       "cutoff": {
         "tau": 0,
         "applied": false,
@@ -1029,6 +1049,10 @@
       "k": 10,
       "pool": 40,
       "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
       "cutoff": {
         "tau": 0,
         "applied": false,
@@ -1267,6 +1291,10 @@
       "k": 5,
       "pool": 40,
       "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
       "cutoff": {
         "tau": 0,
         "applied": false,
@@ -1331,6 +1359,10 @@
       "k": 3,
       "pool": 40,
       "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
       "cutoff": {
         "tau": 0,
         "applied": false,
