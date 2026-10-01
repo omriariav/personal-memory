@@ -91,7 +91,7 @@ function descendants(id: string, next: Map<string, string[]>): string[] {
  * an UNLINKED pending-decision/todo is simply open. Non-open types have none.
  */
 export function entryStatus(
-  e: MemoryEntry,
+  e: Pick<MemoryEntry, "id" | "type">,
   index: Map<string, ChainAnnotation>,
 ): { status: "open" | "resolved"; resolvedBy?: string } | undefined {
   if (!OPEN_TYPES.has(e.type)) return undefined;

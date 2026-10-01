@@ -1,7 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DEFAULT_GRAPH, type MemoryEntry } from "./schema.js";
-import { INDEX_DIR, hashEntry, loadAllEntries } from "./ingest.js";
+import { DEFAULT_GRAPH } from "./schema.js";
+import { INDEX_DIR } from "./ingest.js";
+import { openCatalog, type CatalogEntryMeta } from "./catalog.js";
 
 /**
  * Promotion review state. Capture always lands in the DEFAULT graph; entries
@@ -65,14 +66,13 @@ export async function dismissPromotion(
   graph: string,
   reason?: string,
 ): Promise<PromotionDismissal> {
-  const entries = await loadAllEntries();
-  const entry = entries.find((e) => e.id === id);
+  const [entry] = await (await openCatalog()).byIds([id]);
   if (!entry) throw new Error(`no entry with id '${id}'`);
   if (entry.graphs.includes(graph)) throw new Error(`'${id}' is already a member of '${graph}'`);
   const dismissal: PromotionDismissal = {
     id,
     graph,
-    hash: hashEntry(entry),
+    hash: entry.hash,
     dismissedAt: new Date().toISOString(),
     ...(reason ? { reason } : {}),
   };
@@ -90,7 +90,7 @@ export async function dismissPromotion(
  * agent's judgment, applied on top of this list — never here.
  */
 export function promotionCandidates(
-  entries: MemoryEntry[],
+  entries: CatalogEntryMeta[],
   dismissals: PromotionDismissal[],
   opts: { graph: string; since?: string; until?: string },
 ): PromotionCandidate[] {
@@ -102,7 +102,7 @@ export function promotionCandidates(
     .filter((e) => e.graphs.includes(DEFAULT_GRAPH) && !e.graphs.includes(opts.graph))
     .filter((e) => (opts.since ? e.date >= opts.since : true))
     .filter((e) => (opts.until ? e.date <= opts.until : true))
-    .filter((e) => dismissedHash.get(e.id) !== hashEntry(e))
+    .filter((e) => dismissedHash.get(e.id) !== e.hash)
     .sort((a, b) => b.date.localeCompare(a.date))
     .map((e) => ({
       id: e.id,

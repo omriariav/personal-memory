@@ -14,7 +14,7 @@ import {
   normalizeSourceId,
   ROOT,
 } from "./ingest.js";
-import { search, findSimilar, syncIndex, applyFilters, type SearchCompleteness, type SearchFilters } from "./store.js";
+import { search, findSimilar, syncIndex, type SearchCompleteness, type SearchFilters } from "./store.js";
 import { DEFAULT_GRAPH, sharedGraphs, type GraphId, type MemoryEntry } from "./schema.js";
 import {
   createGraph,
@@ -30,6 +30,7 @@ import { buildChainIndex, entryStatus, validateFollowsTargets, type ChainAnnotat
 import { applyChainLink, dismissSlugSuggestion, mergeSlugs, proposeSlugMerge, slugUsage, type SlugKind } from "./graph-maintenance.js";
 import { recall, type RecallReport } from "./recall.js";
 import { resolveIndexSlotDetailed } from "./index-slots.js";
+import { openCatalog } from "./catalog.js";
 
 const rel = (p: string) => relative(ROOT, p);
 const list = (s?: string) =>
@@ -139,8 +140,11 @@ function chainStatusLines(
 }
 
 /** ` [open]` / ` [resolved → id]` marker for pending-decision/todo listings. */
-function statusSuffix(e: MemoryEntry, chainIndex: Map<string, ChainAnnotation>): string {
-  const s = entryStatus(e, chainIndex);
+// `type` is plain `string` on a catalog-sourced entry (format-agnostic);
+// every stored value is a validated MemoryType, so the narrowing cast below
+// is safe.
+function statusSuffix(e: { id: string; type: string }, chainIndex: Map<string, ChainAnnotation>): string {
+  const s = entryStatus({ id: e.id, type: e.type as MemoryEntry["type"] }, chainIndex);
   if (!s) return "";
   return s.status === "resolved" ? `  [resolved → ${s.resolvedBy ?? "?"}]` : "  [open]";
 }
@@ -792,11 +796,13 @@ async function cmdList(argv: string[]) {
       until: { type: "string" },
       graph: { type: "string" },
       limit: { type: "string" },
+      "index-slot": { type: "string" },
     },
   });
-  const all = await loadAllEntries();
-  const chainIndex = buildChainIndex(all);
-  const entries = applyFilters(all, await filtersFrom(values)).sort(
+  applyIndexSlotFlag(values);
+  const catalog = await openCatalog();
+  const chainIndex = buildChainIndex(await catalog.linked());
+  const entries = (await catalog.filter(await filtersFrom(values))).sort(
     (a, b) => b.date.localeCompare(a.date),
   );
   const limit = values.limit ? Number(values.limit) : entries.length;
@@ -809,18 +815,19 @@ async function cmdList(argv: string[]) {
 async function cmdPerson(argv: string[]) {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { graph: { type: "string" } },
+    options: { graph: { type: "string" }, "index-slot": { type: "string" } },
     allowPositionals: true,
   });
   const given = positionals[0];
   if (!given || positionals.length !== 1) throw new Error("usage: memory person <slug-or-name> [--graph <name>]");
+  applyIndexSlotFlag(values);
   const slug = (await (await import("./people-cli.js")).resolvePersonArg(given))!;
   const graph = values.graph ? requireGraph(values.graph) : undefined;
-  const all = await loadAllEntries();
-  const chainIndex = buildChainIndex(all);
-  const entries = all
-    .filter((e) => e.people.includes(slug) && (!graph || e.graphs.includes(graph)))
-    .sort((a, b) => b.date.localeCompare(a.date));
+  const catalog = await openCatalog();
+  const chainIndex = buildChainIndex(await catalog.linked());
+  const entries = (await catalog.filter({ person: slug, ...(graph ? { graph } : {}) })).sort(
+    (a, b) => b.date.localeCompare(a.date),
+  );
   if (entries.length === 0) {
     console.log(`(no memories mention '${slug}')`);
     return;
@@ -879,7 +886,7 @@ async function cmdDigest(argv: string[]) {
     // id so it never collides with the private digest of the same scope.
     id = id.replace(/^summary-/, `summary-${digestGraph}-`);
   }
-  const raw = applyFilters(await loadAllEntries(), scope)
+  const raw = (await (await openCatalog()).filter(scope))
     .filter((e) => e.type !== "summary")
     .sort((a, b) => a.date.localeCompare(b.date));
 
@@ -954,7 +961,7 @@ async function cmdPromote(argv: string[]) {
     if (!values.to) throw new Error("--to <graph> is required — memory graphs list shows the registry");
     const graph = requireGraph(values.to as string);
     if (graph === DEFAULT_GRAPH) throw new Error("promotion targets a shared graph — the default graph is the source");
-    const entries = await loadAllEntries();
+    const entries = await (await openCatalog()).all();
     const candidates = promotionCandidates(entries, await readPromotionDismissals(), {
       graph,
       since: values.since as string | undefined,
@@ -1007,12 +1014,14 @@ async function cmdRules(argv: string[]) {
       console.log("(no rules configured — memory/graphs/rules.json)");
       return;
     }
-    const entries = await loadAllEntries();
+    const entries = await (await openCatalog()).all();
     for (const r of rules) {
       const match = [r.match.tag ? `tag #${r.match.tag}` : "", r.match.type ? `type ${r.match.type}` : ""]
         .filter(Boolean)
         .join(" + ");
-      const n = entries.filter((e) => e.graphs.includes(DEFAULT_GRAPH) && matchRule(e, r)).length;
+      const n = entries.filter(
+        (e) => e.graphs.includes(DEFAULT_GRAPH) && matchRule({ tags: e.tags, type: e.type as MemoryEntry["type"] }, r),
+      ).length;
       console.log(`● ${match}  →  ${r.graph}  (${r.mode})   matches ${n} private entr${n === 1 ? "y" : "ies"}`);
     }
     return;

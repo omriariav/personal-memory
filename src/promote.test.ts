@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import type { MemoryEntry } from "./schema.js";
 import { promotionCandidates, type PromotionDismissal } from "./promote.js";
 import { hashEntry } from "./ingest.js";
+import type { CatalogEntryMeta } from "./catalog.js";
 
+/** A catalog meta for `entry`'s fixture — `hash` computed the same way `metaOf` does. */
 function entry(
   partial: Partial<MemoryEntry> & Pick<MemoryEntry, "id">,
-): MemoryEntry {
-  return {
+): CatalogEntryMeta {
+  const full: MemoryEntry = {
     date: "2026-01-01",
     type: "note",
     title: partial.id,
@@ -20,10 +22,11 @@ function entry(
     graphs: ["default"],
     ...partial,
   } as MemoryEntry;
+  return { ...full, hash: hashEntry(full) };
 }
 
-function dismissal(e: MemoryEntry, graph = "public"): PromotionDismissal {
-  return { id: e.id, graph, hash: hashEntry(e), dismissedAt: "2026-01-02T00:00:00Z" };
+function dismissal(e: CatalogEntryMeta, graph = "public"): PromotionDismissal {
+  return { id: e.id, graph, hash: e.hash, dismissedAt: "2026-01-02T00:00:00Z" };
 }
 
 test("candidates: private-home non-members only, newest first", () => {
@@ -54,7 +57,7 @@ test("candidates: dismissals are per target graph; legacy records default to pub
   const a = entry({ id: "a" });
   const legacy: PromotionDismissal = {
     id: "a",
-    hash: hashEntry(a),
+    hash: a.hash,
     dismissedAt: "2026-01-02T00:00:00Z",
   };
   assert.deepEqual(promotionCandidates([a], [legacy], { graph: "public" }), []);
