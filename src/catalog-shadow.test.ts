@@ -208,11 +208,44 @@ test("shadow mode, fts: Lance full-text ranking agrees with bm25Scores up to the
      */
     assert.ok(top1Near / compared >= 0.95, `top-1 within ${NEAR_TIE * 100}% of the best reference score: ${top1Near}/${compared}`);
     assert.ok(top1 / compared >= 0.9, `exact top-1 agreement ${top1}/${compared}`);
+
     // filtered FTS returns filtered rows only (spike gate 1)
-    const f: SearchFilters = { type: "decision" };
-    const filtered = new Set((await legacy.filter(f)).map((m) => m.id));
-    const hits = await lance.lexical(queries[0]!, filtered, 40);
-    assert.ok(hits.every((h) => filtered.has(h.id)), "every FTS hit is inside the filter");
+    const decisions = new Set((await legacy.filter({ type: "decision" })).map((m) => m.id));
+    const decisionHits = await lance.lexical(queries[0]!, decisions, 40, { type: "decision" });
+    assert.ok(decisionHits.every((h) => decisions.has(h.id)), "every FTS hit is inside the filter");
+
+    /**
+     * …and the limit applies INSIDE the filtered space. Without the SQL
+     * prefilter, `limit` is spent on rows the `allowed` set then throws away,
+     * so a narrow filter over a common phrasing silently loses hits the
+     * postings leg keeps. `widened` proves at least one draw depends on it.
+     */
+    const rand = mulberry32(23);
+    const pick = <T,>(xs: T[]): T => xs[Math.floor(rand() * xs.length)]!;
+    const people = [...new Set(entries.flatMap((e) => e.people))];
+    const types = [...new Set(entries.map((e) => e.type))];
+    const phrasings = queries.slice(0, 80);
+    let draws = 0;
+    let widened = 0;
+    for (let i = 0; i < 40; i++) {
+      const f: SearchFilters = rand() < 0.5 ? { person: pick(people) } : { type: pick(types) };
+      const scoped = new Set((await legacy.filter(f)).map((m) => m.id));
+      if (scoped.size === 0) continue;
+      const q = pick(phrasings);
+      const ref = await legacy.lexical(q, scoped, 40);
+      const hits = await lance.lexical(q, scoped, 40, f);
+      if (ref.length === 0) continue;
+      draws++;
+      assert.ok(hits.every((h) => scoped.has(h.id)), `every hit inside ${JSON.stringify(f)}`);
+      assert.ok(
+        hits.length >= Math.min(40, ref.length),
+        `filtered fts returned ${hits.length}, postings ${ref.length} for ${JSON.stringify(f)} / "${q}"`,
+      );
+      if ((await lance.lexical(q, scoped, 40)).length < hits.length) widened++;
+    }
+    console.log(`  filtered fts: ${draws} draws at parity with the postings leg · ${widened} recovered hits post-filtering alone would have lost`);
+    assert.ok(draws >= 20, `exercised ${draws} filtered draws`);
+    assert.ok(widened > 0, `${widened} draws recovered hits that post-filtering alone would have lost`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

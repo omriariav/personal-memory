@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import matter from "gray-matter";
 import * as lancedb from "@lancedb/lancedb";
 import { lexicalMode, type Catalog, type CatalogEntryMeta, type LexicalHit, type LexicalMode } from "./catalog.js";
-import { META_COLUMNS, likeLiteral, metaFromRow, openCatalogTables, syncCatalogFromDisk } from "./catalog-sync.js";
+import { META_COLUMNS, likeLiteral, metaFromRow, openCatalogTables, sqlList, syncCatalogFromDisk } from "./catalog-sync.js";
 import { ROOT } from "./ingest.js";
 import { listGraphStores, type Store } from "./graphs.js";
 import { bm25Scores, buildLexicalFromTokens, tokenize, type LexicalIndex } from "./lexical.js";
@@ -11,11 +11,6 @@ import type { ChainSource } from "./chains.js";
 import { FrontmatterSchema, type CatalogEntryRow, type MemoryEntry } from "./schema.js";
 
 type MetaRow = Omit<CatalogEntryRow, "lex">;
-
-/** Ids are SLUG_RE-validated before they reach here, so no quote can appear. */
-function sqlList(ids: string[]): string {
-  return ids.map((i) => `'${i}'`).join(", ");
-}
 
 /** Reads a new-format slot's `entries` table; bodies are read from disk only for hits. */
 export class LanceCatalog implements Catalog {
@@ -134,7 +129,7 @@ export class LanceCatalog implements Catalog {
     return this.postings;
   }
 
-  async lexical(query: string, allowed: Set<string>, limit: number): Promise<LexicalHit[]> {
+  async lexical(query: string, allowed: Set<string>, limit: number, filters?: SearchFilters): Promise<LexicalHit[]> {
     if (this.mode === "postings") {
       return [...bm25Scores(query, await this.referenceIndex()).entries()]
         .filter(([id]) => allowed.has(id))
@@ -143,8 +138,13 @@ export class LanceCatalog implements Catalog {
     }
     const terms = tokenize(query).join(" ");
     if (!terms || !this.table) return [];
-    const rows = (await this.table
-      .query()
+    // The prefilter goes on the query BEFORE fullTextSearch, so `limit` is
+    // spent inside the filtered space (the spike-validated shape). `allowed`
+    // stays the authority below — the SQL clause is only ever a superset.
+    const where = filters ? whereClause(filters) : undefined;
+    let q = this.table.query();
+    if (where) q = q.where(where);
+    const rows = (await q
       .fullTextSearch(terms, { columns: "lex" })
       .select(["id", "_score"])
       .limit(limit)

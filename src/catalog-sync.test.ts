@@ -46,6 +46,8 @@ interface EntrySpec {
   body?: string;
   tags?: string[];
   follows?: string[];
+  /** Ids of the entries a `summary` compacts — the other half of `referrers`. */
+  sources?: string[];
   updated?: string;
   graphs?: string[];
 }
@@ -67,6 +69,7 @@ function makeEntry(root: string, p: EntrySpec): MemoryEntry {
     `title: ${JSON.stringify(title)}`,
     ...(tags.length ? ["tags:", ...tags.map((t) => `  - ${t}`)] : []),
     ...(p.follows?.length ? ["follows:", ...p.follows.map((f) => `  - ${f}`)] : []),
+    ...(p.sources?.length ? ["sources:", ...p.sources.map((s) => `  - ${s}`)] : []),
     ...(p.updated ? [`updated: ${p.updated}`] : []),
     "---",
   ].join("\n");
@@ -86,6 +89,7 @@ function makeEntry(root: string, p: EntrySpec): MemoryEntry {
     people: [],
     teams: [],
     tags,
+    ...(p.sources?.length ? { sources: p.sources } : {}),
     ...(p.follows?.length ? { follows: p.follows } : {}),
     ...(p.updated ? { updated: p.updated } : {}),
     body,
@@ -156,6 +160,7 @@ test("entryRowFor/metaFromRow round-trip to the same meta LegacyCatalog would em
     for (const spec of [
       { id: "2026-01-01-plain" },
       { id: "2026-03-01-rich", date: "2026-03-01", type: "decision" as const, tags: ["budget", "k8s"], follows: ["2026-01-01-plain"], updated: "2026-04-01", graphs: ["default", "team-x"] },
+      { id: "2026-05-01-rollup", date: "2026-05-01", type: "summary" as const, sources: ["2026-01-01-plain", "2026-03-01-rich"] },
     ]) {
       const e = makeEntry(root, spec);
       const { lex: _lex, ...row } = entryRowFor(e, root);
@@ -221,18 +226,28 @@ test("LanceCatalog.open with autoRefresh builds the catalog from the Markdown on
     const stores = [storeOf(root, "default")];
     makeEntry(root, { id: "2026-01-01-a", tags: ["budget"] });
     makeEntry(root, { id: "2026-02-01-b", date: "2026-02-01", type: "decision", follows: ["2026-01-01-a"] });
+    // reaches its target through `sources` only — the other arm of referrers' predicate
+    makeEntry(root, { id: "2026-03-01-rollup", date: "2026-03-01", type: "summary", sources: ["2026-01-01-a"] });
 
     const catalog = await LanceCatalog.open({ slot: "next", dir, root, stores, mode: "postings" });
     assert.equal(catalog.kind, "lance");
     assert.equal(catalog.format, 2);
-    assert.equal(await catalog.count(), 2, "both entries were ingested from disk");
+    assert.equal(await catalog.count(), 3, "every entry was ingested from disk");
     assert.deepEqual((await catalog.filter({ tag: "budget" })).map((m) => m.id), ["2026-01-01-a"]);
-    assert.deepEqual((await catalog.referrers("2026-01-01-a")).map((m) => m.id), ["2026-02-01-b"]);
-    assert.deepEqual((await catalog.linked()).map((m) => m.id).sort(), ["2026-01-01-a", "2026-02-01-b"]);
+    assert.deepEqual(
+      (await catalog.referrers("2026-01-01-a")).map((m) => m.id).sort(),
+      ["2026-02-01-b", "2026-03-01-rollup"],
+      "referrers matches through follows AND through sources",
+    );
+    assert.deepEqual((await catalog.referrers("2026-02-01-b")).map((m) => m.id), [], "no one refers to the decision");
+    const rollup = (await catalog.byIds(["2026-03-01-rollup"]))[0]!;
+    assert.deepEqual(rollup.sources, ["2026-01-01-a"], "sources survive the row round-trip");
+    assert.ok(!("follows" in rollup), "an entry with no follows carries no follows key");
+    assert.deepEqual((await catalog.linked()).map((m) => m.id).sort(), ["2026-01-01-a", "2026-02-01-b"], "a sources-only entry is not a chain member");
     assert.ok((await catalog.lexical("budget", new Set(["2026-01-01-a"]), 10)).length > 0, "the lexical leg scores the rebuilt index");
 
     const manifest = await readManifest(dir);
-    assert.equal(manifest?.N, 2, "refresh wrote a manifest");
+    assert.equal(manifest?.N, 3, "refresh wrote a manifest");
     assert.deepEqual(await catalog.refresh(), { refreshed: false }, "an existing table is not rebuilt");
 
     // the indices survive a reopen and the FTS leg answers from them

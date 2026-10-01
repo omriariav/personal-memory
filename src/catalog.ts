@@ -67,8 +67,14 @@ export interface Catalog {
    * Lexical ranking list for one phrasing, restricted to `allowed`, best
    * first. `limit` bounds an FTS query; the postings scorer returns the full
    * scored list (today's behaviour — RRF sees every scored id).
+   *
+   * `filters` is an optional SQL PREFILTER, never the authority: passing the
+   * same filters that produced `allowed` lets an FTS backend spend `limit`
+   * inside the filtered space instead of on rows `allowed` would discard.
+   * The `allowed` check still runs afterwards, so results are identical
+   * either way — only recall under a narrow filter differs.
    */
-  lexical(query: string, allowed: Set<string>, limit: number): Promise<LexicalHit[]>;
+  lexical(query: string, allowed: Set<string>, limit: number, filters?: SearchFilters): Promise<LexicalHit[]>;
   /** Bring the catalog up to date with the Markdown on disk (no-op for legacy). */
   refresh(): Promise<{ refreshed: boolean }>;
 }
@@ -179,7 +185,8 @@ export class LegacyCatalog implements Catalog {
     });
   }
 
-  async lexical(query: string, allowed: Set<string>, _limit: number): Promise<LexicalHit[]> {
+  /** The postings scorer already sees every doc, so `_filters` buys it nothing. */
+  async lexical(query: string, allowed: Set<string>, _limit: number, _filters?: SearchFilters): Promise<LexicalHit[]> {
     const idx = await ensureLexical(await this.entries(), this.opts.lexicalPath);
     return [...bm25Scores(query, idx).entries()]
       .filter(([id]) => allowed.has(id))

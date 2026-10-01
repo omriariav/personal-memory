@@ -102,7 +102,8 @@ export async function openCatalogTables(db: lancedb.Connection): Promise<{ entri
   };
 }
 
-function sqlList(ids: string[]): string {
+/** Quoted, comma-separated SQL literal list for an `IN (…)` predicate. */
+export function sqlList(ids: string[]): string {
   return ids.map((i) => `'${i.replace(/'/g, "''")}'`).join(", ");
 }
 
