@@ -298,7 +298,9 @@ async function cmdAdd(argv: string[]) {
   console.log(`✓ ${target ? "updated" : "created"} ${fm.id}${label}`);
   console.log(`  ${rel(path)}`);
   console.log(`  indexed (+${stats.added} changed, ${stats.unchanged} unchanged)`);
-  for (const s of stats.slots.slice(1)) console.log(`  ↻ synced slot ${s.slot}`);
+  for (const s of stats.slots.slice(1)) {
+    console.log(s.error ? `  ↻ slot ${s.slot} sync failed: ${s.error}` : `  ↻ synced slot ${s.slot}`);
+  }
   const captured = await markCapturedConnectors(capturedConnectors);
   if (captured.length) console.log(`  connector captured: ${captured.join(", ")}`);
 
@@ -544,7 +546,11 @@ async function cmdIndex(argv: string[]) {
   // The active slot is stats.slots[0]; the rest are the other built slots,
   // kept in step so a slot under evaluation never drifts from the source.
   for (const s of stats.slots.slice(1)) {
-    console.log(`  ↻ synced slot ${s.slot} (+${s.added} changed, ${s.removed} removed)`);
+    console.log(
+      s.error
+        ? `  ↻ slot ${s.slot} sync failed: ${s.error}`
+        : `  ↻ synced slot ${s.slot} (+${s.added} changed, ${s.removed} removed)`,
+    );
   }
   if (values.optimize) {
     const { optimizeIndex } = await import("./store.js");

@@ -252,6 +252,8 @@ export interface SlotSyncStats {
   added: number;
   removed: number;
   unchanged: number;
+  /** Why this slot was skipped. Only ever set for a NON-active slot. */
+  error?: string;
 }
 
 export interface SyncIndexResult {
@@ -272,11 +274,23 @@ type RecordSource = (changed: MemoryEntry[]) => Promise<MemoryRecord[]>;
 type HeaderSource = (changed: MemoryEntry[]) => Promise<HeaderRecord[]>;
 
 /**
+ * A format-2 slot whose persisted catalog version is not the current one. Its
+ * entries/files tables and their FTS index are not comparable to today's, so
+ * they are dropped and rebuilt from the Markdown — the hash-based incremental
+ * diff is version-blind and would see nothing to do. Vectors are untouched: a
+ * catalog layout change never invalidates an embedding.
+ */
+async function catalogVersionStale(dir: string, meta: IndexMeta | null): Promise<boolean> {
+  if (meta?.format !== 2 || meta.catalogVersion !== CATALOG_VERSION) return true;
+  const manifest = await readManifest(dir);
+  return manifest === null || manifest.catalogVersion !== CATALOG_VERSION;
+}
+
+/**
  * Sync ONE slot's chunk (and header) tables against the Markdown source of
  * truth: re-embed only entries whose content hash or graph membership
- * changed, drop deleted ones, rebuild from scratch when the embedder, the row
- * schema or (format 2) the catalog version moved on. Writes that slot's
- * meta.json in its own format.
+ * changed, drop deleted ones, rebuild from scratch when the embedder or the
+ * row schema moved on. Writes that slot's meta.json in its own format.
  */
 async function syncSlotVectors(
   db: lancedb.Connection,
@@ -289,10 +303,9 @@ async function syncSlotVectors(
   const meta = await readMeta(dir);
   const embedderChanged = !meta || meta.embedderId !== embedder.id || meta.dim !== embedder.dim;
   const versionChanged = meta?.indexVersion !== INDEX_VERSION;
-  // A format-2 slot whose meta predates the current catalog layout is rebuilt
-  // rather than topped up — its derived tables are not comparable.
-  const catalogChanged = format === 2 && (meta?.format !== 2 || meta.catalogVersion !== CATALOG_VERSION);
-  const force = opts.force || embedderChanged || versionChanged || catalogChanged;
+  // Only these discard vectors. A catalog version change does NOT: it is the
+  // derived tables it invalidates, and they are rebuilt by the caller.
+  const force = opts.force || embedderChanged || versionChanged;
 
   if (force) {
     const names = await db.tableNames();
@@ -412,24 +425,38 @@ export async function syncIndex(
     });
   };
 
-  const slots: SlotSyncStats[] = [];
-  for (const slot of names) {
+  const syncOne = async (slot: string): Promise<SlotSyncStats> => {
     const dir = slotDir(slot);
     const format = slotFormat(slot);
     await mkdir(dir, { recursive: true });
     const db = await lancedb.connect(dir);
+    // Read BEFORE the sync rewrites meta.json, or the bump is invisible.
+    const catalogStale = format === 2 && (await catalogVersionStale(dir, await readMeta(dir)));
     const r = await syncSlotVectors(db, dir, format, entries, embedder, { force: Boolean(opts.force), records, headers });
     if (format === 1) {
       // The legacy slot's lexical leg: `.index/lexical.json`, shape frozen.
       if (opts.rebuild) await rm(LEXICAL_PATH, { force: true });
       await syncLexical(entries);
     } else {
-      if (opts.rebuild) await dropCatalogTables(db);
+      if (opts.rebuild || catalogStale) await dropCatalogTables(db);
       await syncCatalogTables(db, entries, { root: ROOT });
       await ensureCatalogIndices(db);
       await writeManifest(dir, await manifestFor(db, await scanDirMtimes(listGraphStores(), ROOT), await readManifest(dir)));
     }
-    slots.push({ slot, format, added: r.added, removed: r.removed, unchanged: r.unchanged });
+    return { slot, format, added: r.added, removed: r.removed, unchanged: r.unchanged };
+  };
+
+  // The active slot is the one the caller is about to read from, so its
+  // failure still propagates. A corrupt slot BESIDE it must never fail the
+  // write that triggered the sync — the Markdown is already on disk.
+  const slots: SlotSyncStats[] = [await syncOne(active.slot)];
+  for (const slot of names.slice(1)) {
+    try {
+      slots.push(await syncOne(slot));
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      slots.push({ slot, format: slotFormat(slot), added: 0, removed: 0, unchanged: 0, error });
+    }
   }
   const first = slots[0]!;
   return { added: first.added, removed: first.removed, unchanged: first.unchanged, slots };

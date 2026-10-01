@@ -125,3 +125,87 @@ test("syncIndex --rebuild on the legacy slot rebuilds lexical.json in place, wit
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("syncIndex: a catalog version bump rebuilds the catalog tables and keeps every vector", { timeout: 240_000 }, () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-sync-catalog-bump-")));
+  const nextDir = join(root, ".index", "slots", "next");
+  const metaPath = join(nextDir, "meta.json");
+  try {
+    seedStore(root);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const b = await import(${BUILD_MOD}); console.log(JSON.stringify(await b.buildSlot({ name: "next" })));`);
+
+    // Corrupt one catalog row's pre-tokenized text while leaving its hash
+    // alone: the version-blind incremental diff sees nothing to do, so only a
+    // genuine drop-and-rebuild can restore it.
+    runInStore(
+      root,
+      `const lancedb = await import(${LANCE});
+       const db = await lancedb.connect(${JSON.stringify(nextDir)});
+       const t = await db.openTable("entries");
+       const [row] = await t.query().where("id = '2026-01-06-rare-codeword'").toArray();
+       await t.delete("id = '2026-01-06-rare-codeword'");
+       await t.add([{ ...row, lex: "zzzz" }]);
+       console.log(JSON.stringify({ ok: true }));`,
+    );
+    const stale = JSON.parse(readFileSync(metaPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(metaPath, `${JSON.stringify({ ...stale, catalogVersion: 0 }, null, 2)}\n`, "utf8");
+
+    const r = runInStore(
+      root,
+      `${COUNT_EMBEDS}
+       const s = await import(${STORE_MOD});
+       const sync = await s.syncIndex();
+       const lancedb = await import(${JSON.stringify(join(REPO, "node_modules", "@lancedb", "lancedb", "dist", "index.js"))});
+       const db = await lancedb.connect(${JSON.stringify(nextDir)});
+       const t = await db.openTable("entries");
+       const [row] = await t.query().where("id = '2026-01-06-rare-codeword'").toArray();
+       const chunks = await (await db.openTable("memory")).countRows();
+       console.log(JSON.stringify({ sync, calls, lex: row.lex, entries: await t.countRows(), chunks }));`,
+    ) as { sync: { slots: { slot: string }[] }; calls: number; lex: string; entries: number; chunks: number };
+
+    assert.equal(r.calls, 0, "a catalog version bump never re-embeds");
+    assert.ok(r.chunks > 0, "the vector table survived the catalog rebuild");
+    assert.ok(!r.lex.includes("zzzz"), "the catalog row was rebuilt from the Markdown, not kept by the hash diff");
+    assert.ok(r.lex.includes("codeword"), `the rebuilt row carries the real tokens, got: ${r.lex}`);
+    assert.equal(r.entries, 7, "every entry is back in the catalog");
+    const meta = JSON.parse(readFileSync(metaPath, "utf8")) as { catalogVersion: number };
+    assert.equal(meta.catalogVersion, 1, "meta.json records the current catalog version");
+    const manifest = JSON.parse(readFileSync(join(nextDir, "catalog-manifest.json"), "utf8")) as { catalogVersion: number; N: number };
+    assert.equal(manifest.catalogVersion, 1);
+    assert.equal(manifest.N, 7);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("syncIndex: a broken non-active slot is reported, never fatal to the write", { timeout: 240_000 }, () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-sync-broken-slot-")));
+  try {
+    seedStore(root);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    runInStore(root, `const b = await import(${BUILD_MOD}); console.log(JSON.stringify(await b.buildSlot({ name: "next" })));`);
+    writeFileSync(join(root, ".index", "slots", "next", "meta.json"), "{ not json", "utf8");
+    writeFileSync(
+      join(root, "memory", "entries", "2026", "01", "2026-01-09-penguin-rollout.md"),
+      md({ id: "2026-01-09-penguin-rollout", date: "2026-01-09", type: "note", title: "Penguin rollout", people: [], teams: [], tags: ["rollout"] }, "penguin rollout body text"),
+    );
+    const r = runInStore(
+      root,
+      `${COUNT_ROWS}
+       const s = await import(${STORE_MOD});
+       const sync = await s.syncIndex();
+       const legacyChunks = await count(${JSON.stringify(join(root, ".index"))}, "memory");
+       console.log(JSON.stringify({ sync, legacyChunks }));`,
+    ) as { sync: { added: number; slots: { slot: string; error?: string }[] }; legacyChunks: number };
+
+    assert.equal(r.sync.added, 1, "the active slot was synced");
+    assert.equal(r.legacyChunks, 8, "the new entry reached the active slot's chunk table");
+    assert.deepEqual(r.sync.slots.map((s) => s.slot), ["legacy", "next"], "the broken slot is still reported");
+    assert.equal(r.sync.slots[0]!.error, undefined, "the active slot succeeded");
+    assert.ok(r.sync.slots[1]!.error, "the broken slot carries its failure");
+    assert.match(r.sync.slots[1]!.error!, /meta\.json/, `the message names what failed, got: ${r.sync.slots[1]!.error}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
