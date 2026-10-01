@@ -63,16 +63,6 @@ export function normalizeSourceId(raw: string): string {
   return `${s.slice(0, i).toLowerCase()}:${s.slice(i + 1)}`;
 }
 
-/** First entry whose source_ids intersect any of `ids` (the dedup anchor). */
-export function findEntryBySourceIds(
-  entries: MemoryEntry[],
-  ids: string[],
-): MemoryEntry | undefined {
-  if (ids.length === 0) return undefined;
-  const want = new Set(ids);
-  return entries.find((e) => (e.source_ids ?? []).some((s) => want.has(s)));
-}
-
 /** Recursively list all .md files under a directory. */
 async function listMarkdown(dir: string): Promise<string[]> {
   if (!existsSync(dir)) return [];
