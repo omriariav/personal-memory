@@ -105,6 +105,8 @@ export interface CorpusMeta {
   generator: number;
   chunkRows: number;
   buildMs?: number;
+  /** The index slot the run read (`--index-slot`); absent on reports recorded before slots existed. */
+  slot?: string;
 }
 
 export interface EvalReport {
@@ -443,7 +445,7 @@ export function renderMarkdown(report: EvalReport): string {
   const corpus =
     m.corpus === "real-store"
       ? "real store"
-      : `synthetic · ${m.corpus.size} entries · seed ${m.corpus.seed} · generator ${m.corpus.generator} · ${m.corpus.chunkRows} chunk rows${m.corpus.buildMs ? ` · built in ${(m.corpus.buildMs / 1000).toFixed(0)} s` : ""}`;
+      : `synthetic · ${m.corpus.size} entries · seed ${m.corpus.seed} · generator ${m.corpus.generator} · ${m.corpus.chunkRows} chunk rows${m.corpus.buildMs ? ` · built in ${(m.corpus.buildMs / 1000).toFixed(0)} s` : ""}${m.corpus.slot ? ` · slot ${m.corpus.slot}` : ""}`;
   const lines = [
     `# Retrieval evaluation baseline`,
     ``,

@@ -35,8 +35,11 @@ test("packList/unpackList round-trip; empty ⇄ ''", () => {
   assert.deepEqual(unpackList(""), []);
 });
 
-test("lexicalMode: default fts, postings accepted, anything else rejected", () => {
-  assert.equal(lexicalMode({}), "fts");
+test("lexicalMode: default postings, fts opt-in, anything else rejected", () => {
+  // The default is the harness decision (docs/eval/fts-spike.md): FTS is
+  // faster and better on MRR/nDCG@10, but its k1 flips a gated case.
+  assert.equal(lexicalMode({}), "postings");
+  assert.equal(lexicalMode({ MEMORY_LEXICAL: "fts" }), "fts");
   assert.equal(lexicalMode({ MEMORY_LEXICAL: "postings" }), "postings");
   assert.throws(() => lexicalMode({ MEMORY_LEXICAL: "bm25" }), /MEMORY_LEXICAL/);
 });

@@ -53,10 +53,16 @@ import {
 import { resolveTunables, type RankingTunables } from "./ranking-tunables.js";
 import { detectPeople, getAliasIndex, type Detection } from "./people.js";
 
-/** Person slugs used by any entry — the alias index's implicit vocabulary. */
-export async function knownPeople(): Promise<Set<string>> {
+/**
+ * Person slugs used by any entry — the alias index's implicit vocabulary.
+ *
+ * `slot` is the slot the caller already resolved (`--index-slot`): without it
+ * a slot-pinned read would still take this list from the DEFAULT slot, paying
+ * a full Markdown parse through `LegacyCatalog` on every alias lookup.
+ */
+export async function knownPeople(slot?: string): Promise<Set<string>> {
   const people = new Set<string>();
-  for (const m of await (await openCatalog()).all()) for (const p of m.people) people.add(p);
+  for (const m of await (await openCatalog(slot ? { slot } : {})).all()) for (const p of m.people) people.add(p);
   return people;
 }
 
@@ -907,7 +913,7 @@ export async function searchDetailed(
   let detection: Detection | undefined;
   let entityMatches: Map<string, number> | undefined;
   if (tunables.ENTITY_LEG_WEIGHT > 0) {
-    detection = detectPeople(qs[0]!.text, await getAliasIndex(knownPeople));
+    detection = detectPeople(qs[0]!.text, await getAliasIndex(() => knownPeople(index.slot)));
     // Only names that needed an alias to resolve: a typed slug already
     // matches lexically, and boosting its every entry cost exact-title lookups.
     entityMatches = entityMatchesFor(detection.aliased, filtered, tunables.ENTITY_MAX_DF);

@@ -109,7 +109,9 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
   // augmenting it boosted every entry about that person and cost exact-title
   // lookups their first place.
   const primaryText = positionals[0] ?? "";
-  const people = primaryText.trim() ? detectPeople(primaryText, await getAliasIndex(knownPeople)).aliased : [];
+  // The alias vocabulary comes from the slot this recall will read, so a
+  // slot-pinned run never falls back to a full parse of the default slot.
+  const people = primaryText.trim() ? detectPeople(primaryText, await getAliasIndex(() => knownPeople(opts.slot))).aliased : [];
   const queries = buildRecallQueries(positionals, filters, Boolean(opts.noExpand), people);
   const search = await searchDetailed(queries, filters, k, {
     deep: opts.deep ?? true,

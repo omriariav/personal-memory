@@ -17,9 +17,19 @@ import { META_FILENAME, resolveIndexSlotDetailed } from "./index-slots.js";
 
 export type LexicalMode = "postings" | "fts";
 
-/** MEMORY_LEXICAL: `fts` (LanceDB full-text index, new-format slots) or `postings` (the reference BM25 scorer). */
+/**
+ * MEMORY_LEXICAL: `fts` (LanceDB full-text index, new-format slots) or
+ * `postings` (the reference BM25 scorer).
+ *
+ * `postings` is the default by measurement, not preference: the 4k harness
+ * (docs/eval/fts-spike.md, "Harness decision") has FTS ahead on MRR and
+ * nDCG@10 and far faster, but Lance's BM25 k1 = 1.2 against our 1.5 shifts
+ * enough rankings to flip a gated case (paraphrase-09) to failing. The
+ * reference scorer keeps new-format slots bit-compatible with the legacy
+ * slot; `MEMORY_LEXICAL=fts` opts in until the k1 gap is closed.
+ */
 export function lexicalMode(env: Record<string, string | undefined> = process.env): LexicalMode {
-  const raw = env.MEMORY_LEXICAL ?? "fts";
+  const raw = env.MEMORY_LEXICAL ?? "postings";
   if (raw === "fts" || raw === "postings") return raw;
   throw new Error(`MEMORY_LEXICAL must be one of fts|postings, got '${raw}'`);
 }

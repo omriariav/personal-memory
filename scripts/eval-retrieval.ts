@@ -35,6 +35,7 @@ const { values } = parseArgs({
     "fail-on-regression": { type: "boolean", default: false },
     only: { type: "string" },
     "allow-remote": { type: "boolean", default: false },
+    "index-slot": { type: "string" },
   },
 });
 
@@ -116,6 +117,24 @@ for (;;) {
   if (h.remaining === 0) break;
 }
 
+// Optional: evaluate a new-format slot. Built on first use from the corpus'
+// legacy index (vectors reused by (id, hash)); writers above already keep it
+// in sync on later runs.
+const slotName = values["index-slot"];
+if (slotName) {
+  const { slotExists } = await import("../src/index-slots.js");
+  if (!slotExists(slotName)) {
+    const { buildSlot, formatBuildReport } = await import("../src/slot-build.js");
+    const r = await buildSlot({ name: slotName });
+    console.error(`slot ${slotName}: built — ${formatBuildReport(r)}`);
+  }
+  process.env.MEMORY_INDEX_SLOT = slotName;
+  // Asked of the engine rather than spelled out here, so the line still tells
+  // the truth after the lexical default moves.
+  const { lexicalMode } = await import("../src/catalog.js");
+  console.error(`slot: ${slotName} (MEMORY_LEXICAL=${lexicalMode()})`);
+}
+
 // warm-up (model load) — excluded from per-case latency
 const warm = await recall(["warm up"], { k: 1, now: Date.UTC(2026, 6, 1) });
 
@@ -146,7 +165,10 @@ const report: EvalReport = {
     commit,
     node: process.version,
     embedderId: embedder.id,
-    corpus: { size, seed, generator: manifest.generator, chunkRows: warm.chunkRows, buildMs },
+    // The slot the warm-up actually read, not the one the flag asked for: a
+    // corpus with no legacy root resolves to the fresh new-format slot, and
+    // recording "legacy" there would mislabel the numbers below.
+    corpus: { size, seed, generator: manifest.generator, chunkRows: warm.chunkRows, buildMs, slot: warm.index.slot },
     mode,
     now: new Date(now).toISOString(),
   },

@@ -73,3 +73,58 @@ FTS is viable only on a LanceDB release with exact top-k — landed as `^0.37.1`
 so the plan's fallback (a `postings` table + JS `bm25Scores`) is not needed.
 Next: implement `MEMORY_LEXICAL=postings|fts` behind the `Catalog` seam and let
 `npm run eval --compare` decide.
+
+## Harness decision (2026-10-01)
+
+The spike left the choice to the harness. Both legs were measured on the 4k
+synthetic corpus (seed 42, generator 3, 4088 chunk rows) in the `next`
+new-format slot, against `docs/eval/baseline-4k.json` — the legacy slot's
+recorded baseline. `npm run eval` (legacy slot, unchanged) is delta 0 on
+every metric in both rounds, so the slot numbers below isolate the lexical
+leg alone.
+
+`MEMORY_LEXICAL=fts` (`npm run eval:slot` with the FTS leg):
+
+| metric | baseline | fts slot | delta |
+|---|---|---|---|
+| recall@1 | 0.6827 | 0.6999 | +0.0173 |
+| recall@5 | 0.8978 | 0.8974 | −0.0004 |
+| recall@10 | 0.9146 | 0.9076 | **−0.0070** |
+| recall@40 | 0.9507 | 0.9507 | 0 |
+| MRR | 0.8294 | 0.8376 | **+0.0082** |
+| nDCG@10 | 0.8503 | 0.8558 | **+0.0055** |
+| pair pass rate | 1 | 1 | 0 |
+| mean returned | 19.1479 | 19.2465 | +0.0986 |
+| latency p50 / p95 | 101 / 119 ms | 68 / 80 ms | −33 / −39 ms |
+
+newly failing: `paraphrase-09` · newly passing: `needle-06-fact`,
+`needle-06-vs-dup` (142 cases, xfail 0).
+
+The three gated metrics are all within −0.01 — recall@10 is the only one
+down, by 0.0070 — and FTS is a third faster. **But a non-xfail case flips to
+failing**, which the decision rule treats as disqualifying on its own.
+Lance's BM25 uses k1 = 1.2 against our 1.5: the lower term-frequency
+saturation reshuffles enough mid-list rankings to cost `paraphrase-09` its
+place, and buy two `needle-06` cases theirs. The net is positive on average
+and negative on the one case the gate watches.
+
+`MEMORY_LEXICAL=postings` (the default this decision installs):
+
+| metric | baseline | postings slot | delta |
+|---|---|---|---|
+| recall@1 / @5 / @10 / @40 | 0.6827 / 0.8978 / 0.9146 / 0.9507 | identical | 0 |
+| MRR | 0.8294 | 0.8294 | 0 |
+| nDCG@10 | 0.8503 | 0.8503 | 0 |
+| pair pass rate | 1 | 1 | 0 |
+| mean returned | 19.1479 | 19.1479 | 0 |
+| latency p50 / p95 | 101 / 119 ms | 108 / 121 ms | +7 / +2 ms |
+
+newly failing: none · newly passing: none.
+
+**Decision: `postings` is the default for new-format slots** (`lexicalMode()`
+in `src/catalog.ts`); a new-format slot is therefore rank-identical to the
+legacy slot out of the box. `MEMORY_LEXICAL=fts` is opt-in and stays
+supported — it is the faster leg and wins on MRR and nDCG@10 — until the k1
+gap is closed, either by configuring Lance's k1 to 1.5 (or ours to 1.2) and
+re-running `npm run eval:slot` to delta 0 up to tie order. Reproduce with
+`npm run eval:slot` and `MEMORY_LEXICAL=fts npm run eval:slot`.

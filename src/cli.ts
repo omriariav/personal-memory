@@ -29,6 +29,7 @@ import { commitMemoryRepo } from "./memory-git.js";
 import { buildChainIndex, entryStatus, validateFollowsTargets, type ChainAnnotation } from "./chains.js";
 import { applyChainLink, dismissSlugSuggestion, mergeSlugs, proposeSlugMerge, slugUsage, type SlugKind } from "./graph-maintenance.js";
 import { recall, type RecallReport } from "./recall.js";
+import { resolveIndexSlotDetailed } from "./index-slots.js";
 
 const rel = (p: string) => relative(ROOT, p);
 const list = (s?: string) =>
@@ -40,6 +41,19 @@ async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const c of process.stdin) chunks.push(c as Buffer);
   return Buffer.concat(chunks).toString("utf8").trim();
+}
+
+/**
+ * `--index-slot <name>` picks the index slot for this command. Resolution in
+ * the engine is lazy (index-slots.ts), so exporting the flag as
+ * MEMORY_INDEX_SLOT before the first store call is enough; validating here
+ * turns a typo into one clear line instead of a stack trace mid-search.
+ */
+function applyIndexSlotFlag(values: Record<string, unknown>): void {
+  const slot = values["index-slot"] as string | undefined;
+  if (!slot) return;
+  resolveIndexSlotDetailed({ override: slot }); // throws "unknown index slot" / "invalid index slot name"
+  process.env.MEMORY_INDEX_SLOT = slot;
 }
 
 /** `--person` accepts a slug, a display name, a nickname, or a close slug (see `memory people`). */
@@ -534,8 +548,12 @@ async function cmdIndex(argv: string[]) {
       return;
     }
     console.log(`${r.dryRun ? "(dry run) would build" : "✓ built"} slot '${r.slot}' — ${formatBuildReport(r)}`);
-    // The slot is built but not activated; MEMORY_INDEX_SLOT is how a read targets it today.
-    if (!r.dryRun) console.log(`  try it: MEMORY_INDEX_SLOT=${r.slot} npx tsx src/cli.ts recall "…"`);
+    // The slot is built but not activated: `--index-slot` reads it for one
+    // command (MEMORY_INDEX_SLOT=<name> does the same for every command).
+    if (!r.dryRun) {
+      console.log(`  try it: npx tsx src/cli.ts recall "…" --index-slot ${r.slot}`);
+      console.log(`  activate it later with: npx tsx src/cli.ts index --activate ${r.slot}`);
+    }
     return;
   }
   if (values["dry-run"]) throw new Error("usage: --dry-run applies only to: memory index --build <slot> [--dry-run]");
@@ -576,9 +594,11 @@ async function cmdQuery(argv: string[]) {
       deep: { type: "boolean" },
       "no-cutoff": { type: "boolean" },
       rerank: { type: "boolean" },
+      "index-slot": { type: "string" },
     },
     allowPositionals: true,
   });
+  applyIndexSlotFlag(values);
   // Each positional is its own query phrasing; all are fused. Quote each one.
   const queries = positionals.map((q) => q.trim()).filter(Boolean);
   if (queries.length === 0) {
@@ -685,9 +705,11 @@ async function cmdRecall(argv: string[]) {
       "no-rerank": { type: "boolean" },
       "show-queries": { type: "boolean" },
       shallow: { type: "boolean" },
+      "index-slot": { type: "string" },
     },
     allowPositionals: true,
   });
+  applyIndexSlotFlag(values);
   const queries = positionals.map((q) => q.trim()).filter(Boolean);
   if (queries.length === 0) {
     throw new Error(
@@ -707,6 +729,9 @@ async function cmdRecall(argv: string[]) {
     completeness: recallCompleteness(values),
     completeLimit: positiveInt(values["complete-limit"], 200, "--complete-limit"),
     requireComplete: Boolean(values["require-complete"]),
+    // Named explicitly as well as via the env, so the reported `index` names
+    // the flag's slot even if something later unset MEMORY_INDEX_SLOT.
+    ...(values["index-slot"] ? { slot: values["index-slot"] as string } : {}),
   });
 
   if (format === "json") console.log(JSON.stringify(report, null, 2));
@@ -1216,15 +1241,16 @@ Usage:
   memory index [--force|--reembed] [--rebuild] [--optimize [--header-batch N]]   # --rebuild: rebuild the synced slots' catalog/lexical tables reusing vectors; --reembed (= --force): drop and re-embed; --optimize compacts + backfills title vectors (memory_headers) in bounded batches
   memory index --build [<slot>] [--dry-run] [--force]       # build a complete new-format index beside the current one (vectors reused; never activates)
             # the slot name defaults to 'next' (or 'main' when the store has no index at all)
-  memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep] [--no-cutoff]
+  memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep] [--no-cutoff] [--index-slot <name>]
             # each quoted positional is a separate phrasing; all are fused (2-4 recommended)
             # --deep: recall-over-precision preset (k=40, wider candidate pool)
-  memory recall "<question>" ["<agent phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph G] [-k N]
+  memory recall "<question>" ["<agent phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph G] [-k N] [--index-slot <name>]
             [--complete | --complete-if-small | --no-complete] [--require-complete] [--no-expand] [--no-cutoff] [--rerank|--no-rerank] [--format text|json]
             # --rerank: opt-in second pass through a local cross-encoder (MEMORY_RERANK=1 to default on; ~1-2 s, one-time model download)
             # first phrasing is primary; extras are agent-supplied; CLI adds deterministic expansions unless --no-expand
             # default: k=40, deep pools, complete-if-small (limit 200)
             # --graph <name> scopes to one graph's members; default searches ALL (shared memberships labeled)
+            # --index-slot <name>: query another built index slot (A/B before \`index --activate\`); MEMORY_INDEX_SLOT=<name> does the same
   memory list [--person|--type|--team|--tag|--since|--until|--graph|--limit]
   memory person <slug> [--graph <name>]
   memory digest --person <slug> | --quarter <YYYY-Qn> | --tag <slug> [--graph <name>]
