@@ -58,18 +58,26 @@ function entityMatchesFor(slugs: string[], filtered: MemoryEntry[], maxDf: numbe
 // importers (cli, server, recall, membership) keep working unchanged.
 export { applyFilters, type QueryOrigin, type QuerySpec, type SearchCompleteness, type SearchFilters };
 
-const TABLE = "memory";
+export const TABLE = "memory";
 /**
  * One row per entry: the embedding of title + metadata alone (the header
  * leg). Lives BESIDE the chunk table so adding it never touches existing
  * vectors: changed entries get their row at sync time, the rest are
  * backfilled in bounded batches by `optimizeIndex` / `index --optimize`.
  */
-const HEADERS_TABLE = "memory_headers";
+export const HEADERS_TABLE = "memory_headers";
 export const HEADER_BACKFILL_BATCH = 500;
 
+/**
+ * Supplies an already-computed vector for a row, keyed by that row's natural
+ * key (`rowId` for chunks, `id` for headers), so a row whose text is
+ * unchanged is copied instead of re-embedded — `index --build` reuses the
+ * active slot's vectors this way. `undefined` means "embed this text".
+ */
+export type VectorSource = (rowKey: string) => number[] | undefined;
+
 /** Same filter columns as the chunk table so `whereClause` prefilters apply. */
-interface HeaderRecord {
+export interface HeaderRecord {
   id: string;
   hash: string;
   date: string;
@@ -82,9 +90,20 @@ interface HeaderRecord {
   vector: number[];
 }
 
-async function headerRecordsFor(entries: MemoryEntry[], embedder: Embedder): Promise<HeaderRecord[]> {
+export async function headerRecordsFor(
+  entries: MemoryEntry[],
+  embedder: Embedder,
+  reuse?: VectorSource,
+): Promise<HeaderRecord[]> {
   const texts = entries.map(headerText);
-  const vectors = await embedder.embed(texts);
+  const vectors: (number[] | undefined)[] = entries.map((e) => reuse?.(e.id));
+  const missing = vectors.flatMap((v, i) => (v ? [] : [i]));
+  if (missing.length > 0) {
+    const fresh = await embedder.embed(missing.map((i) => texts[i]!));
+    missing.forEach((i, j) => {
+      vectors[i] = fresh[j]!;
+    });
+  }
   return entries.map((e, i) => ({
     id: e.id,
     hash: hashEntry(e),
@@ -130,7 +149,7 @@ async function upsertHeaders(db: lancedb.Connection, records: HeaderRecord[]): P
  * (N named graphs, synced-copy model). v6: the home graph renamed
  * `private` → `default` (persisted membership strings must rewrite).
  */
-const INDEX_VERSION = 6;
+export const INDEX_VERSION = 6;
 
 function currentSlot(): SlotResolution {
   return resolveIndexSlotDetailed();
@@ -162,15 +181,28 @@ function sqlList(ids: string[]): string {
 }
 
 /** Build the chunk-level records (with vectors) for a set of entries. */
-async function recordsFor(entries: MemoryEntry[], embedder: Embedder): Promise<MemoryRecord[]> {
-  const pending: { entry: MemoryEntry; chunkIndex: number; text: string; hash: string }[] = [];
+export async function recordsFor(
+  entries: MemoryEntry[],
+  embedder: Embedder,
+  reuse?: VectorSource,
+): Promise<MemoryRecord[]> {
+  const pending: { entry: MemoryEntry; rowId: string; chunkIndex: number; text: string; hash: string; vector?: number[] }[] = [];
   for (const e of entries) {
     const hash = hashEntry(e);
-    chunkEntry(e).forEach((text, chunkIndex) => pending.push({ entry: e, chunkIndex, text, hash }));
+    chunkEntry(e).forEach((text, chunkIndex) => {
+      const rowId = `${e.id}#${chunkIndex}`;
+      pending.push({ entry: e, rowId, chunkIndex, text, hash, vector: reuse?.(rowId) });
+    });
   }
-  const vectors = await embedder.embed(pending.map((p) => p.text));
-  return pending.map((p, i) => ({
-    rowId: `${p.entry.id}#${p.chunkIndex}`,
+  const missing = pending.filter((p) => !p.vector);
+  if (missing.length > 0) {
+    const vectors = await embedder.embed(missing.map((p) => p.text));
+    missing.forEach((p, i) => {
+      p.vector = vectors[i]!;
+    });
+  }
+  return pending.map((p) => ({
+    rowId: p.rowId,
     id: p.entry.id,
     chunkIndex: p.chunkIndex,
     date: p.entry.date,
@@ -183,7 +215,7 @@ async function recordsFor(entries: MemoryEntry[], embedder: Embedder): Promise<M
     graphs: packSlugs(p.entry.graphs),
     hash: p.hash,
     text: p.text,
-    vector: vectors[i]!,
+    vector: p.vector!,
   }));
 }
 

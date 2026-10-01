@@ -508,8 +508,29 @@ async function cmdGraphs(argv: string[]) {
 async function cmdIndex(argv: string[]) {
   const { values } = parseArgs({
     args: argv,
-    options: { force: { type: "boolean" }, optimize: { type: "boolean" }, "header-batch": { type: "string" } },
+    options: {
+      force: { type: "boolean" },
+      optimize: { type: "boolean" },
+      "header-batch": { type: "string" },
+      build: { type: "string" },
+      "dry-run": { type: "boolean" },
+    },
   });
+  if (values.build !== undefined) {
+    const { buildSlot, formatBuildReport } = await import("./slot-build.js");
+    const r = await buildSlot({ name: values.build, dryRun: Boolean(values["dry-run"]), force: Boolean(values.force) });
+    if (r.skipped === "already-built") {
+      console.log(
+        `✓ slot '${r.slot}' is already built — rebuild it with: npx tsx src/cli.ts index --build ${r.slot} --force`,
+      );
+      return;
+    }
+    console.log(`${r.dryRun ? "(dry run) would build" : "✓ built"} slot '${r.slot}' — ${formatBuildReport(r)}`);
+    // The slot is built but not activated; MEMORY_INDEX_SLOT is how a read targets it today.
+    if (!r.dryRun) console.log(`  try it: MEMORY_INDEX_SLOT=${r.slot} npx tsx src/cli.ts recall "…"`);
+    return;
+  }
+  if (values["dry-run"]) throw new Error("usage: --dry-run applies only to: memory index --build <slot> [--dry-run]");
   const stats = await syncIndex({ force: Boolean(values.force) });
   console.log(
     `✓ index synced — ${stats.added} (re)embedded, ${stats.removed} removed, ${stats.unchanged} unchanged`,
@@ -1176,6 +1197,7 @@ Usage:
   memory rules [list]                  # standing distribution rules (memory/graphs/rules.json)
   memory rules apply [--dry-run]       # reconcile all rules against existing private entries
   memory index [--force] [--optimize [--header-batch N]]   # --optimize compacts + backfills title vectors (memory_headers) in bounded batches
+  memory index --build <slot> [--dry-run] [--force]         # build a complete new-format index beside the current one (vectors reused; never activates)
   memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep] [--no-cutoff]
             # each quoted positional is a separate phrasing; all are fused (2-4 recommended)
             # --deep: recall-over-precision preset (k=40, wider candidate pool)
