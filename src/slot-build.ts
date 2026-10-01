@@ -224,21 +224,47 @@ export async function buildSlot(
   });
 }
 
+/** Whether a slot currently holds a complete index (`legacy` included — it is a slot that can be empty). */
+function isBuiltSlot(slot: string, root: string): boolean {
+  return listSlots(root).some((s) => s.name === slot && s.built);
+}
+
+/**
+ * `slotExists` answers true for `legacy` unconditionally — the root is always
+ * a legal name — so activation needs the stronger question: is there an index
+ * there to switch to? Pinning an emptied root would leave every later read
+ * silently answering from nothing.
+ */
+function requireBuiltSlot(slot: string, root: string, viaPrevious: boolean): void {
+  if (isBuiltSlot(slot, root)) return;
+  const what = viaPrevious ? `previous index slot '${slot}' is no longer built` : `index slot '${slot}' is not built`;
+  // The legacy root is rebuilt by a sync pinned to it: a plain sync only
+  // touches the active slot and the slots that are already built.
+  const remedy =
+    slot === LEGACY_SLOT
+      ? `MEMORY_INDEX_SLOT=${LEGACY_SLOT} npx tsx src/cli.ts index`
+      : `npx tsx src/cli.ts index --build ${slot}`;
+  throw new Error(`${what} — build it with: ${remedy}   (index slots lists what exists)`);
+}
+
 /**
  * Write `active.json`, recording the slot that was active as `previous` so
  * the switch is one command to undo. `"previous"` names that recorded slot,
  * which makes activate / activate-previous a round trip. `"legacy"` is a slot
  * like any other here: it pins the legacy root explicitly instead of leaving
- * the choice to the default. A slot that is not built is refused, naming the
- * command that would build it.
+ * the choice to the default. A slot that holds no index is refused, naming
+ * the command that would build it, and never becomes a `previous` pointer
+ * that the rollback would land on.
  */
 export async function activateSlot(name: string, root: string = INDEX_ROOT): Promise<{ active: ActiveFile; changed: boolean }> {
   const current = resolveIndexSlotDetailed({ root, env: {} });
-  // Validates existence and resolves "previous"; throws for unknown names.
+  // Validates the name and resolves "previous"; throws for unknown names.
   const target = resolveIndexSlotDetailed({ root, env: {}, override: name }).slot;
+  requireBuiltSlot(target, root, name === "previous");
   const pinned = readActiveSync(root);
   if (target === current.slot && pinned?.slot === target) return { active: pinned, changed: false };
-  const active: ActiveFile = { slot: target, ...(current.slot !== target ? { previous: current.slot } : {}) };
+  const rollbackable = current.slot !== target && isBuiltSlot(current.slot, root);
+  const active: ActiveFile = { slot: target, ...(rollbackable ? { previous: current.slot } : {}) };
   await writeActive(active, root);
   return { active, changed: true };
 }

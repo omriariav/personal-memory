@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DERIVED_ARTIFACTS, LEGACY_SLOT, PRESERVED_SIDECARS, readActiveSync } from "./index-slots.js";
+import { DERIVED_ARTIFACTS, LEGACY_SLOT, PRESERVED_SIDECARS, readActiveSync, writeActive } from "./index-slots.js";
 import { activateSlot, pruneSlots, slotStatus } from "./slot-build.js";
 
 const META2 = {
@@ -79,6 +79,61 @@ test("compat (d): prune plans without --confirm, refuses the active slot, delete
     const again = await pruneSlots({ confirm: true, root });
     assert.deepEqual(again.removed, [], "nothing left to prune");
     await assert.rejects(activateSlot("previous", root), /no previous index slot/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("activation refuses the legacy root once its index is gone, and leaves active.json alone", async () => {
+  const root = fixture();
+  try {
+    await activateSlot("next", root);
+    await pruneSlots({ confirm: true, root });
+    const before = readFileSync(join(root, "active.json"), "utf8");
+    await assert.rejects(activateSlot(LEGACY_SLOT, root), /index slot 'legacy' is not built/);
+    await assert.rejects(activateSlot(LEGACY_SLOT, root), /MEMORY_INDEX_SLOT=legacy npx tsx src\/cli\.ts index/);
+    assert.equal(readFileSync(join(root, "active.json"), "utf8"), before, "a refused activation writes nothing");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("activation refuses a 'previous' whose index was removed behind our back", async () => {
+  const root = fixture();
+  try {
+    await activateSlot("next", root);
+    assert.deepEqual(readActiveSync(root), { slot: "next", previous: LEGACY_SLOT });
+    // The legacy index disappears without going through prune, so the
+    // `previous` pointer survives and now names an unbuilt slot.
+    rmSync(join(root, "meta.json"));
+    const before = readFileSync(join(root, "active.json"), "utf8");
+    await assert.rejects(activateSlot("previous", root), /previous index slot 'legacy' is no longer built/);
+    assert.equal(readFileSync(join(root, "active.json"), "utf8"), before, "a refused activation writes nothing");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("activating the legacy root is allowed while it holds an index", async () => {
+  const root = fixture();
+  try {
+    assert.deepEqual(await activateSlot(LEGACY_SLOT, root), { active: { slot: LEGACY_SLOT }, changed: true });
+    await activateSlot("next", root);
+    assert.deepEqual(readActiveSync(root), { slot: "next", previous: LEGACY_SLOT });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an unbuilt slot is never recorded as 'previous'", async () => {
+  const root = fixture();
+  try {
+    // active.json points at a slot that is gone; resolution falls back to the
+    // legacy root, which here holds no index either.
+    rmSync(join(root, "meta.json"));
+    rmSync(join(root, "slots", "other"), { recursive: true });
+    await writeActive({ slot: "other" }, root);
+    assert.deepEqual((await activateSlot("next", root)).active, { slot: "next" }, "no dead previous pointer");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
