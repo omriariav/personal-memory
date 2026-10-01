@@ -14,6 +14,8 @@ Options:
                        Default: ../personal-memory-backups
   --no-update          Do not fetch or fast-forward the current branch.
   --skip-install       Do not run npm ci/npm install.
+  --build-next-index   After migrating, build the next-format search index
+                       slot (never activated; try it with --index-slot next).
   -h, --help           Show this help text.
 
 The script never pushes commits or memory data to a remote.
@@ -38,6 +40,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 BACKUP_DIR="$(dirname "$REPO_ROOT")/personal-memory-backups"
 UPDATE_CODE=1
 INSTALL_DEPS=1
+BUILD_NEXT_INDEX=0
 
 # shellcheck source=migration_lib.sh
 source "$SCRIPT_DIR/migration_lib.sh"
@@ -55,6 +58,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-install)
       INSTALL_DEPS=0
+      shift
+      ;;
+    --build-next-index)
+      BUILD_NEXT_INDEX=1
       shift
       ;;
     -h|--help)
@@ -171,6 +178,14 @@ npx tsx scripts/migrate-graphs.ts
 
 log "Verifying the graph registry"
 npx tsx src/cli.ts graphs list
+
+# A second, complete index beside the one in use. The migration never switches
+# the store onto it: activation stays a separate, deliberate command.
+if (( BUILD_NEXT_INDEX )); then
+  log "Building the next-format index slot (not activated)"
+  npx tsx src/cli.ts index --build next
+  printf 'Try it with: npx tsx src/cli.ts recall "…" --index-slot next\nActivate when satisfied: npx tsx src/cli.ts index --activate next\n'
+fi
 
 printf '\nMigration complete.\n'
 if [[ -n "$backup_path" ]]; then

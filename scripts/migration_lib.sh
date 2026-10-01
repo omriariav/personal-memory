@@ -3,13 +3,28 @@
 # Shared safety helpers for migrate.sh and restore_backup.sh. This file is
 # sourced by both entrypoints and intentionally has no side effects.
 
+# User judgment that no rebuild can recreate, plus the active-slot pointer.
+# Must stay in step with PRESERVED_SIDECARS in src/index-slots.ts — these are
+# the only .index/ paths a backup archive may carry.
 DURABLE_INDEX_STATE_FILES=(
   connector-state.json
   promotion-dismissals.json
   chain-dismissals.json
   slug-dismissals.json
   slug-proposals.json
+  maintenance-state.json
+  graph-maintenance.json
+  active.json
 )
+
+migration_is_durable_index_path() {
+  local candidate="$1" state_file
+  [[ "$candidate" == ".index" ]] && return 0
+  for state_file in "${DURABLE_INDEX_STATE_FILES[@]}"; do
+    [[ "$candidate" == ".index/$state_file" ]] && return 0
+  done
+  return 1
+}
 
 migration_physical_dir() {
   (cd "$1" && pwd -P)
@@ -63,10 +78,7 @@ migration_validate_archive() {
         has_graph_store=1
         ;;
       .index)
-        case "$archive_entry" in
-          .index|.index/connector-state.json|.index/promotion-dismissals.json|.index/chain-dismissals.json|.index/slug-dismissals.json|.index/slug-proposals.json) ;;
-          *) die "archive contains a non-durable .index path: $archive_entry" ;;
-        esac
+        migration_is_durable_index_path "$archive_entry" || die "archive contains a non-durable .index path: $archive_entry"
         ;;
       *)
         die "archive contains an unexpected top-level path: $top_level"
