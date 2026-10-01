@@ -104,13 +104,19 @@ export function slotFormat(slot: string): 1 | 2 {
 }
 
 export function readIndexMetaSync(dir: string): IndexMeta | null {
+  const path = join(dir, META_FILENAME);
   let raw: string;
   try {
-    raw = readFileSync(join(dir, META_FILENAME), "utf8");
+    raw = readFileSync(path, "utf8");
   } catch {
     return null;
   }
-  const data = JSON.parse(raw) as Record<string, unknown>;
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(`invalid ${path}: ${err instanceof Error ? err.message : String(err)}`);
+  }
   if (data && data.format === 2) return SlotMetaSchema.parse(data);
   // Legacy shape: missing fields are defaults; never fail on an old file.
   const meta: LegacyMeta = { format: 1 };

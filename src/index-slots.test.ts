@@ -10,6 +10,7 @@ import {
   isSlotName,
   listSlots,
   readActiveSync,
+  readIndexMetaSync,
   resolveIndexSlotDetailed,
   slotDir,
   writeActive,
@@ -103,6 +104,18 @@ test("listSlots: legacy row reflects meta.json presence; built, building and act
     writeFileSync(join(root, "active.json"), JSON.stringify({ slot: "next", previous: LEGACY_SLOT }));
     const rows = listSlots(root).map((s) => `${s.name}:${s.format}:${s.built ? "built" : "-"}:${s.building ? "building" : "-"}:${s.active ? "active" : "-"}:${s.previous ? "prev" : "-"}`);
     assert.deepEqual(rows, ["legacy:1:built:-:-:prev", "later:2:-:building:-:-", "next:2:built:-:active:-"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readIndexMetaSync: a corrupt meta.json throws a labeled error instead of a raw SyntaxError", () => {
+  const root = tempRoot();
+  try {
+    mkdirSync(join(root, "slots", "broken"), { recursive: true });
+    const metaPath = join(root, "slots", "broken", "meta.json");
+    writeFileSync(metaPath, "{not json");
+    assert.throws(() => readIndexMetaSync(join(root, "slots", "broken")), new RegExp(`invalid ${metaPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
