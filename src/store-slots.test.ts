@@ -64,6 +64,24 @@ test("a read never builds a slot: entries but no index is refused with the build
   }
 });
 
+test("optimizeIndex on a store whose active slot was never built creates no slot directory", { timeout: 120_000 }, () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-optimize-unbuilt-")));
+  try {
+    seedStore(root);
+    // Entries on disk, nothing indexed: the active slot resolves to `main`,
+    // which does not exist. The weekly job must report on it, not create it.
+    const r = runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.optimizeIndex()));`) as {
+      tableExists: boolean;
+      slots: { slot: string; format: number; fts: unknown }[];
+    };
+    assert.equal(r.tableExists, false, "there is no chunk table to compact");
+    assert.deepEqual(r.slots.map((s) => [s.slot, s.format, s.fts]), [["main", 2, null]], "the unbuilt active slot is reported, not skipped");
+    assert.equal(existsSync(join(root, ".index", "slots")), false, "and compacting it leaves no empty slots/ behind");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a store with no entries at all recalls to an empty report, not an error, and still creates nothing", { timeout: 120_000 }, () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-empty-store-")));
   try {

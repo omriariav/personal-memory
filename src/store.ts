@@ -638,7 +638,10 @@ export async function optimizeIndex(
   const optimizeOne = async (slot: string, format: 1 | 2): Promise<SlotOptimizeStats> => {
     const isActive = slot === active.slot;
     const dir = slotDir(slot);
-    await mkdir(dir, { recursive: true });
+    // Same rule as `indexStatus`/`headerStatus`: `lancedb.connect` CREATES the
+    // directory it is handed, and compacting a slot nothing has built must not
+    // leave an empty `slots/<name>/` behind for `index slots` to report.
+    if (!existsSync(dir)) return { slot, format, fts: null };
     const db = await lancedb.connect(dir);
     const table = await openTable(db);
     if (table) {
