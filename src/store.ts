@@ -25,6 +25,7 @@ import {
   dropCatalogTables,
   ensureCatalogIndices,
   manifestFor,
+  openCatalogTables,
   readManifest,
   scanDirMtimes,
   syncCatalogTables,
@@ -568,31 +569,109 @@ export async function dropHeadersForTest(): Promise<void> {
   if ((await db.tableNames()).includes(HEADERS_TABLE)) await db.dropTable(HEADERS_TABLE);
 }
 
+/** What `optimizeIndex` did to ONE slot. */
+export interface SlotOptimizeStats {
+  slot: string;
+  format: 1 | 2;
+  /**
+   * The catalog's FTS coverage once this call finished — `unindexed` is 0
+   * whenever the fold succeeded. Null for a slot with no FTS index at all:
+   * every format-1 slot (its lexical leg is `lexical.json`), and a format-2
+   * slot whose catalog is still empty.
+   */
+  fts: { indexed: number; unindexed: number } | null;
+  /** Why this slot was skipped. Only ever set for a NON-active slot. */
+  error?: string;
+}
+
 export interface OptimizeIndexResult {
   tableExists: boolean;
   cleanupOlderThan: string;
   stats: OptimizeStats | null;
   /** Header backfill progress made by this call. */
   headers: { embedded: number; remaining: number };
+  /** One row per built slot, the active one first. */
+  slots: SlotOptimizeStats[];
 }
 
+/**
+ * FTS coverage of a catalog's `lex` column. The index name is read from the
+ * table rather than assumed, so a LanceDB naming change surfaces as "no FTS
+ * index" instead of a silent `undefined` stat.
+ */
+async function ftsCoverage(entries: lancedb.Table): Promise<SlotOptimizeStats["fts"]> {
+  const idx = (await entries.listIndices()).find((i) => i.columns.includes("lex"));
+  if (!idx) return null;
+  const stats = await entries.indexStats(idx.name);
+  return stats ? { indexed: stats.numIndexedRows, unindexed: stats.numUnindexedRows } : null;
+}
+
+/**
+ * Compact EVERY built slot, not just the active one: `ensureCatalogIndices`
+ * deliberately never optimizes, so rows a sync appended after the FTS index
+ * was created stay searchable-but-unfolded until this runs. That is true of a
+ * `next` slot under evaluation as much as of the slot in use, so both are
+ * folded here — and a broken slot beside the active one is reported rather
+ * than allowed to abort the rest (the same isolation rule as `syncIndex`).
+ *
+ * Only the ACTIVE slot's numbers go in `tableExists`/`stats`/`headers`, which
+ * is what existing callers print; `slots` is additive.
+ */
 export async function optimizeIndex(
   cleanupOlderThanDays = 7,
   opts: { headerBatch?: number } = {},
 ): Promise<OptimizeIndexResult> {
-  const dir = indexDir();
-  await mkdir(dir, { recursive: true });
-  const db = await lancedb.connect(dir);
-  const table = await openTable(db);
   const cleanupOlderThan = new Date(Date.now() - cleanupOlderThanDays * 24 * 60 * 60 * 1000);
-  if (!table) {
-    return { tableExists: false, cleanupOlderThan: cleanupOlderThan.toISOString(), stats: null, headers: { embedded: 0, remaining: 0 } };
+  const active = currentSlot();
+  const names = [active.slot, ...listBuiltSlots().map((s) => s.name).filter((n) => n !== active.slot)];
+  let tableExists = false;
+  let stats: OptimizeStats | null = null;
+  let headers = { embedded: 0, remaining: 0 };
+
+  const optimizeOne = async (slot: string): Promise<SlotOptimizeStats> => {
+    const isActive = slot === active.slot;
+    const dir = slotDir(slot);
+    const format = slotFormat(slot);
+    await mkdir(dir, { recursive: true });
+    const db = await lancedb.connect(dir);
+    const table = await openTable(db);
+    if (table) {
+      const s = await table.optimize({ cleanupOlderThan });
+      if (isActive) {
+        tableExists = true;
+        stats = s;
+      }
+    }
+    // The backfill only ever writes to the active slot, and it runs before
+    // that slot's header table is compacted so the rows it just wrote are
+    // folded too. Gated on the chunk table, as it has always been: an
+    // unbuilt index is not a reason to start embedding titles.
+    if (isActive && table) headers = await backfillHeaders({ batch: opts.headerBatch });
+    const ht = await openHeaders(db);
+    if (ht) await ht.optimize({ cleanupOlderThan });
+    let fts: SlotOptimizeStats["fts"] = null;
+    if (format === 2) {
+      const { entries, files } = await openCatalogTables(db);
+      if (entries) {
+        await entries.optimize({ cleanupOlderThan }); // folds the un-indexed rows into the FTS index
+        fts = await ftsCoverage(entries);
+      }
+      if (files) await files.optimize({ cleanupOlderThan });
+    }
+    return { slot, format, fts };
+  };
+
+  // The active slot is the one every read answers from, so its failure still
+  // propagates; a slot beside it must never fail the weekly job.
+  const slots: SlotOptimizeStats[] = [await optimizeOne(active.slot)];
+  for (const slot of names.slice(1)) {
+    try {
+      slots.push(await optimizeOne(slot));
+    } catch (err) {
+      slots.push({ slot, format: slotFormat(slot), fts: null, error: err instanceof Error ? err.message : String(err) });
+    }
   }
-  const stats = await table.optimize({ cleanupOlderThan });
-  const headers = await backfillHeaders({ batch: opts.headerBatch });
-  const ht = await openHeaders(db);
-  if (ht) await ht.optimize({ cleanupOlderThan });
-  return { tableExists: true, cleanupOlderThan: cleanupOlderThan.toISOString(), stats, headers };
+  return { tableExists, cleanupOlderThan: cleanupOlderThan.toISOString(), stats, headers, slots };
 }
 
 /**

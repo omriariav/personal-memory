@@ -1,15 +1,34 @@
-import { loadAllEntries } from "./ingest.js";
 import { indexStatus } from "./store.js";
 import { lexicalStatus } from "./lexical.js";
-import type { MemoryEntry } from "./schema.js";
+import { openCatalog, type CatalogEntryMeta } from "./catalog.js";
+import { resolveIndexSlotDetailed } from "./index-slots.js";
+import { NEXT_SLOT, formatSlotTable, slotStatus, type SlotStatusRow } from "./slot-build.js";
 import { analyzeGraphHygiene, readSlugDismissals, readSlugProposals, slugDismissalKeys, writeGraphMaintenanceAudit } from "./graph-maintenance.js";
 import { buildChainIndex } from "./chains.js";
 
 /**
  * Read-only hygiene report: digest debt (scopes with many unsummarized raw
  * entries → suggested `memory digest` commands), index health, and slug
- * hygiene (likely-duplicate people/team slugs). Never writes anything.
+ * hygiene (likely-duplicate people/team slugs). Never writes anything — and
+ * in particular never builds or syncs a slot: it reports what is on disk.
  */
+
+/** The store size past which running on the legacy index is worth a nudge. */
+export const SLOT_HINT_ENTRIES = 2000;
+
+/**
+ * One line when the store is large and nothing but the legacy format exists.
+ * A format-2 slot that is merely half-built does not count: the hint is about
+ * there being an index in the new format to try, not a directory.
+ */
+export function slotHint(rows: SlotStatusRow[], entries: number): string | null {
+  if (entries <= SLOT_HINT_ENTRIES) return null;
+  if (rows.some((r) => r.format === 2 && r.built)) return null;
+  return (
+    `hint: ${entries} entries — build the next-format index: npx tsx src/cli.ts index --build ${NEXT_SLOT},` +
+    ` try it with --index-slot ${NEXT_SLOT}, then --activate ${NEXT_SLOT}`
+  );
+}
 
 interface Scope {
   kind: "person" | "quarter" | "tag";
@@ -22,7 +41,7 @@ function quarterOf(date: string): string {
   return `${y}-Q${Math.floor((Number(m) - 1) / 3) + 1}`;
 }
 
-function digestDebt(entries: MemoryEntry[], threshold: number): Scope[] {
+function digestDebt(entries: CatalogEntryMeta[], threshold: number): Scope[] {
   const raw = entries.filter((e) => e.type !== "summary");
   // Every raw entry already cited by some summary's `sources` is "covered".
   const covered = new Set(
@@ -48,7 +67,8 @@ function digestDebt(entries: MemoryEntry[], threshold: number): Scope[] {
 }
 
 export async function runMaintenance(threshold: number): Promise<void> {
-  const entries = await loadAllEntries();
+  const catalog = await openCatalog();
+  const entries = await catalog.all();
 
   console.log("## Digest debt");
   const debt = digestDebt(entries, threshold);
@@ -68,9 +88,13 @@ export async function runMaintenance(threshold: number): Promise<void> {
   console.log(
     `entries ${idx.totalEntries} · indexed ${idx.indexedEntries} · stale ${idx.staleEntries} · missing ${idx.missingEntries} · chunks ${idx.chunkRows} (${idx.embedderId ?? "no index"})`,
   );
-  const lex = await lexicalStatus();
-  console.log(lex ? `lexical: ${lex.docs} docs, ${lex.terms} terms` : "lexical: (missing)");
-  if (idx.staleEntries + idx.missingEntries > 0 || !lex || lex.docs !== idx.totalEntries) {
+  // `lexical.json` is the format-1 lexical leg. A new-format slot indexes its
+  // text with FTS inside the catalog, so reporting the root file as "missing"
+  // there would be a permanent false alarm.
+  const lex = idx.format === 1 ? await lexicalStatus() : null;
+  const lexStale = idx.format === 1 && (!lex || lex.docs !== idx.totalEntries);
+  if (idx.format === 1) console.log(lex ? `lexical: ${lex.docs} docs, ${lex.terms} terms` : "lexical: (missing)");
+  if (idx.staleEntries + idx.missingEntries > 0 || lexStale) {
     console.log("→ fix: npx tsx src/cli.ts index");
   }
   const { headerLegEnabled, headerStatus } = await import("./store.js");
@@ -79,6 +103,14 @@ export async function runMaintenance(threshold: number): Promise<void> {
     console.log(`headers: ${hs.headers}/${hs.entries} entries have a title vector${hs.missing ? ` · ${hs.missing} awaiting backfill` : ""}`);
     if (hs.missing > 0) console.log("→ fill: npx tsx src/cli.ts index --optimize   (bounded batches; the weekly job also runs it)");
   }
+  // Every slot on disk, built or not — `slotStatus` reads, it never derives a
+  // slot into existence.
+  const rows = await slotStatus();
+  console.log(formatSlotTable(rows));
+  const hint = slotHint(rows, idx.totalEntries);
+  if (hint) console.log(hint);
+  const resolution = resolveIndexSlotDetailed();
+  if (resolution.warning) console.log(`⚠ ${resolution.warning}`);
 
   console.log("\n## Connectors");
   const { loadConnectors } = await import("./connectors.js");
@@ -94,7 +126,7 @@ export async function runMaintenance(threshold: number): Promise<void> {
   }
 
   console.log("\n## Dangling links");
-  const chainIndex = buildChainIndex(entries);
+  const chainIndex = buildChainIndex(await catalog.linked());
   const dangling = [...chainIndex.entries()].filter(([, a]) => a.dangling?.length);
   if (dangling.length === 0) {
     console.log("(none)");

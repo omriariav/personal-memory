@@ -614,8 +614,16 @@ async function cmdIndex(argv: string[]) {
   if (values.optimize) {
     const { optimizeIndex } = await import("./store.js");
     const r = await optimizeIndex(7, { headerBatch: positiveInt(values["header-batch"], 500, "--header-batch") });
+    // `fts a/b`: a of b catalog rows are folded into the full-text index.
+    const slots = r.slots
+      .map((s) =>
+        s.error
+          ? `${s.slot} (failed: ${s.error})`
+          : `${s.slot}${s.fts ? ` (fts ${s.fts.indexed}/${s.fts.indexed + s.fts.unindexed})` : ""}`,
+      )
+      .join(", ");
     console.log(
-      `✓ optimized — headers backfilled ${r.headers.embedded}, ${r.headers.remaining} remaining${r.headers.remaining ? " (run again to continue)" : ""}`,
+      `✓ optimized — headers backfilled ${r.headers.embedded}, ${r.headers.remaining} remaining${r.headers.remaining ? " (run again to continue)" : ""} · slots ${slots}`,
     );
   }
 }
