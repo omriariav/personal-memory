@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
@@ -310,9 +310,40 @@ export async function activateSlot(name: string, root: string = INDEX_ROOT): Pro
 
 export interface PruneReport {
   active: string;
-  removed: { slot: string; paths: string[] }[];
+  removed: { slot: string; paths: string[]; interrupted?: boolean }[];
   kept: string[];
   confirmed: boolean;
+}
+
+/**
+ * How recently a `<slot>__building` directory must have been touched to count
+ * as a build still in flight. A build writes continuously, so anything older
+ * than this is an interrupted one the next build would discard anyway.
+ */
+export const BUILD_IN_PROGRESS_MS = 10 * 60 * 1000;
+
+/** Newest mtime anywhere under `dir` (the dir's own when it holds nothing). */
+function newestMtimeMs(dir: string): number {
+  let newest = 0;
+  const walk = (d: string) => {
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(d);
+    } catch {
+      return;
+    }
+    newest = Math.max(newest, st.mtimeMs);
+    if (!st.isDirectory()) return;
+    let names: string[];
+    try {
+      names = readdirSync(d);
+    } catch {
+      return;
+    }
+    for (const name of names) walk(join(d, name));
+  };
+  walk(dir);
+  return newest;
 }
 
 /**
@@ -350,6 +381,17 @@ export async function pruneSlots(opts: { confirm: boolean; root?: string }): Pro
       if (paths.length > 0) removed.push({ slot: LEGACY_SLOT, paths });
       continue;
     }
+    if (s.building) {
+      // A build in flight writes into `<slot>__building` for as long as it
+      // takes; deleting that directory out from under it loses the whole run.
+      const age = Date.now() - newestMtimeMs(s.dir);
+      if (age < BUILD_IN_PROGRESS_MS) {
+        kept.push(`in-progress build '${s.name}' (modified ${Math.max(0, Math.round(age / 60000))} min ago)`);
+        continue;
+      }
+      removed.push({ slot: s.name, paths: [s.dir], interrupted: true });
+      continue;
+    }
     removed.push({ slot: s.name, paths: [s.dir] });
   }
   if (opts.confirm) {
@@ -357,7 +399,9 @@ export async function pruneSlots(opts: { confirm: boolean; root?: string }): Pro
     const pinned = readActiveSync(root);
     // A `previous` that no longer exists would make `--activate previous`
     // fail at the worst moment; drop it instead.
-    if (pinned?.previous && removed.some((r) => r.slot === pinned.previous)) {
+    // Only a real slot's removal invalidates the pointer: a `<name>__building`
+    // dir shares its slot's name but is not the slot `previous` points at.
+    if (pinned?.previous && removed.some((r) => !r.interrupted && r.slot === pinned.previous)) {
       await writeActive({ slot: pinned.slot }, root);
     }
   }

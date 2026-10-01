@@ -565,11 +565,17 @@ async function cmdIndex(argv: string[]) {
   if (values.prune) {
     const { pruneSlots } = await import("./slot-build.js");
     const r = await pruneSlots({ confirm: Boolean(values.confirm) });
+    // Printed before the "nothing to prune" line too: a build in flight is the
+    // one reason a directory the user can see is deliberately left alone.
+    for (const k of r.kept) if (k.startsWith("in-progress build ")) console.log(`kept: ${k}`);
     if (r.removed.length === 0) {
       console.log(`(nothing to prune — only the active slot '${r.active}' exists)`);
       return;
     }
-    for (const x of r.removed) console.log(`${r.confirmed ? "✓ removed" : "would remove"} slot '${x.slot}': ${x.paths.map(rel).join(", ")}`);
+    for (const x of r.removed) {
+      const what = x.interrupted ? `interrupted build '${x.slot}'` : `slot '${x.slot}'`;
+      console.log(`${r.confirmed ? "✓ removed" : "would remove"} ${what}: ${x.paths.map(rel).join(", ")}`);
+    }
     if (r.confirmed) {
       console.log(`kept active slot '${r.active}'; sidecars untouched`);
       return;
@@ -580,6 +586,15 @@ async function cmdIndex(argv: string[]) {
   }
   if (values.confirm) throw new Error("usage: --confirm applies only to: memory index --prune --confirm");
   if (values.build !== undefined) {
+    // A build always writes every row into a fresh directory, so there is
+    // nothing for these two to mean here — and silently ignoring them would
+    // let `index --build next --reembed` look like it re-embedded the corpus.
+    const stray = [...(values.rebuild ? ["--rebuild"] : []), ...(values.reembed ? ["--reembed"] : [])];
+    if (stray.length > 0) {
+      throw new Error(
+        `usage: ${stray.join(" and ")} ${stray.length > 1 ? "apply" : "applies"} only to a sync of the active slot: memory index [--rebuild] [--reembed]   (a build writes every row anyway; pass --force to replace an already-built slot)`,
+      );
+    }
     const { buildSlot, formatBuildReport } = await import("./slot-build.js");
     const r = await buildSlot({ name: values.build || undefined, dryRun: Boolean(values["dry-run"]), force: Boolean(values.force) });
     if (r.skipped === "already-built") {

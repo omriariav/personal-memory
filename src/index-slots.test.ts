@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   DERIVED_ARTIFACTS,
   LEGACY_SLOT,
@@ -193,4 +194,22 @@ test("names: slotDir maps legacy to the root and rejects invalid or reserved nam
   assert.equal(isSlotName("previous"), false);
   assert.ok(PRESERVED_SIDECARS.includes("active.json"), "active.json is a preserved sidecar");
   assert.ok(DERIVED_ARTIFACTS.every((f) => !PRESERVED_SIDECARS.includes(f)), "derived and preserved sets are disjoint");
+});
+
+/**
+ * The migration scripts decide what survives an index move from their OWN copy
+ * of this list. Two lists, one rule: a sidecar added here and forgotten there
+ * would be deleted by a migration. The shell array is read out of the file
+ * rather than restated here, so this test cannot drift along with it.
+ */
+test("PRESERVED_SIDECARS and migration_lib.sh's DURABLE_INDEX_STATE_FILES name the same files", () => {
+  const libPath = join(dirname(dirname(fileURLToPath(import.meta.url))), "scripts", "migration_lib.sh");
+  const block = /DURABLE_INDEX_STATE_FILES=\(([^)]*)\)/.exec(readFileSync(libPath, "utf8"));
+  assert.ok(block, `no DURABLE_INDEX_STATE_FILES array in ${libPath}`);
+  const shell = block[1]!
+    .split("\n")
+    .map((l) => l.replace(/#.*$/, "").trim())
+    .filter(Boolean);
+  assert.ok(shell.length > 1, `parsed only ${shell.length} entries out of the shell array — the regex stopped matching`);
+  assert.deepEqual([...shell].sort(), [...PRESERVED_SIDECARS].sort(), "the two durable-sidecar lists must stay in step");
 });

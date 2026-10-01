@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DERIVED_ARTIFACTS, LEGACY_SLOT, PRESERVED_SIDECARS, readActiveSync, writeActive } from "./index-slots.js";
@@ -39,7 +39,15 @@ function fixture(): string {
     writeFileSync(join(root, "slots", name, "meta.json"), JSON.stringify(META2));
   }
   mkdirSync(join(root, "slots", "stale__building"), { recursive: true });
+  // Long untouched: an interrupted build, not one in flight.
+  backdate(join(root, "slots", "stale__building"), 60);
   return root;
+}
+
+/** Push a path's mtime `minutes` into the past. */
+function backdate(path: string, minutes: number): void {
+  const when = new Date(Date.now() - minutes * 60_000);
+  utimesSync(path, when, when);
 }
 
 test("compat (d): activate next, then previous, round-trips; activation refuses unbuilt slots", async () => {
@@ -64,6 +72,11 @@ test("compat (d): prune plans without --confirm, refuses the active slot, delete
     const plan = await pruneSlots({ confirm: false, root });
     assert.equal(plan.confirmed, false);
     assert.deepEqual(plan.removed.map((r) => r.slot).sort(), [LEGACY_SLOT, "other", "stale"]);
+    assert.deepEqual(
+      plan.removed.filter((r) => r.interrupted).map((r) => r.slot),
+      ["stale"],
+      "the long-abandoned __building dir is reported as an interrupted build, not as a slot",
+    );
     assert.deepEqual(plan.kept, ["next"]);
     assert.ok(existsSync(join(root, "slots", "other", "meta.json")), "plan deletes nothing");
 
@@ -79,6 +92,40 @@ test("compat (d): prune plans without --confirm, refuses the active slot, delete
     const again = await pruneSlots({ confirm: true, root });
     assert.deepEqual(again.removed, [], "nothing left to prune");
     await assert.rejects(activateSlot("previous", root), /no previous index slot/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prune keeps a __building dir a concurrent build is still writing to, and says so", async () => {
+  const root = fixture();
+  try {
+    await activateSlot("next", root);
+    // A build in flight: `slots/fresh__building` touched moments ago.
+    mkdirSync(join(root, "slots", "fresh__building", "memory.lance"), { recursive: true });
+    writeFileSync(join(root, "slots", "fresh__building", "memory.lance", "data"), "x");
+
+    const plan = await pruneSlots({ confirm: false, root });
+    assert.ok(
+      !plan.removed.some((r) => r.slot === "fresh"),
+      `a build in flight is never a prune candidate: ${JSON.stringify(plan.removed.map((r) => r.slot))}`,
+    );
+    assert.ok(
+      plan.kept.some((k) => /^in-progress build 'fresh' \(modified \d+ min ago\)$/.test(k)),
+      `the plan says why it was kept: ${JSON.stringify(plan.kept)}`,
+    );
+
+    await pruneSlots({ confirm: true, root });
+    assert.ok(existsSync(join(root, "slots", "fresh__building", "memory.lance", "data")), "and --confirm leaves it on disk");
+    assert.equal(existsSync(join(root, "slots", "stale__building")), false, "while the abandoned one still goes");
+
+    // Once it ages past the window it is an interrupted build like any other.
+    backdate(join(root, "slots", "fresh__building", "memory.lance", "data"), 30);
+    backdate(join(root, "slots", "fresh__building", "memory.lance"), 30);
+    backdate(join(root, "slots", "fresh__building"), 30);
+    const later = await pruneSlots({ confirm: true, root });
+    assert.deepEqual(later.removed.map((r) => [r.slot, r.interrupted]), [["fresh", true]], "aged out, removed as an interrupted build");
+    assert.equal(existsSync(join(root, "slots", "fresh__building")), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

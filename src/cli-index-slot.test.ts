@@ -25,6 +25,21 @@ function cliStderr(cwd: string, args: string[], env: Record<string, string> = {}
   throw new Error(`expected \`${args.join(" ")}\` to fail, but it succeeded`);
 }
 
+test("index --build: --rebuild and --reembed are a usage error, not silently ignored", () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-cli-build-flags-"));
+  try {
+    const rebuild = cliStderr(root, ["index", "--build", "next", "--rebuild"]);
+    assert.match(rebuild, /--rebuild applies only to a sync of the active slot/, "the flag names itself");
+    assert.match(rebuild, /--force to replace an already-built slot/, "and points at the flag that does mean something here");
+
+    assert.match(cliStderr(root, ["index", "--build", "next", "--reembed"]), /--reembed applies only to a sync/, "--reembed too");
+    assert.match(cliStderr(root, ["index", "--build", "next", "--rebuild", "--reembed"]), /--rebuild and --reembed apply only/, "both at once");
+    assert.match(cliStderr(root, ["index", "--dry-run"]), /--dry-run applies only to: memory index --build/, "the existing misuse error still stands");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 /** Both streams of one CLI run — the resolver warning goes to stderr while the answer goes to stdout. */
 function cliBoth(cwd: string, args: string[], env: Record<string, string> = {}): { stdout: string; stderr: string } {
   const r = spawnSync(process.execPath, ["--import", join(REPO, "node_modules", "tsx", "dist", "loader.mjs"), join(REPO, "src", "cli.ts"), ...args], {
