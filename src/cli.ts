@@ -506,8 +506,11 @@ async function cmdGraphs(argv: string[]) {
 }
 
 async function cmdIndex(argv: string[]) {
+  // `--build` may be given with no slot name, in which case buildSlot picks
+  // the default; parseArgs needs that spelled as an explicit empty value.
+  const args = argv.map((a, i) => (a === "--build" && (argv[i + 1]?.startsWith("-") ?? true) ? "--build=" : a));
   const { values } = parseArgs({
-    args: argv,
+    args,
     options: {
       force: { type: "boolean" },
       optimize: { type: "boolean" },
@@ -518,7 +521,7 @@ async function cmdIndex(argv: string[]) {
   });
   if (values.build !== undefined) {
     const { buildSlot, formatBuildReport } = await import("./slot-build.js");
-    const r = await buildSlot({ name: values.build, dryRun: Boolean(values["dry-run"]), force: Boolean(values.force) });
+    const r = await buildSlot({ name: values.build || undefined, dryRun: Boolean(values["dry-run"]), force: Boolean(values.force) });
     if (r.skipped === "already-built") {
       console.log(
         `✓ slot '${r.slot}' is already built — rebuild it with: npx tsx src/cli.ts index --build ${r.slot} --force`,
@@ -1197,7 +1200,8 @@ Usage:
   memory rules [list]                  # standing distribution rules (memory/graphs/rules.json)
   memory rules apply [--dry-run]       # reconcile all rules against existing private entries
   memory index [--force] [--optimize [--header-batch N]]   # --optimize compacts + backfills title vectors (memory_headers) in bounded batches
-  memory index --build <slot> [--dry-run] [--force]         # build a complete new-format index beside the current one (vectors reused; never activates)
+  memory index --build [<slot>] [--dry-run] [--force]       # build a complete new-format index beside the current one (vectors reused; never activates)
+            # the slot name defaults to 'next' (or 'main' when the store has no index at all)
   memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep] [--no-cutoff]
             # each quoted positional is a separate phrasing; all are fused (2-4 recommended)
             # --deep: recall-over-precision preset (k=40, wider candidate pool)

@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { PRESERVED_SIDECARS } from "./index-slots.js";
+import { defaultBuildName } from "./slot-build.js";
 import { REPO, STORE_MOD, md, runInStore, seedStore } from "./test-store.js";
 
 const BUILD_MOD = JSON.stringify(join(REPO, "src", "slot-build.ts"));
@@ -52,6 +53,7 @@ test("index --build next: reuses every vector, leaves the root slot untouched, p
     assert.equal(built.r.embedded, 0, "existing chunk vectors are copied by (id, hash)");
     assert.equal(built.r.vectorsReused, built.r.chunks);
     assert.equal(built.embeddedTexts, 0);
+    assert.equal(built.r.embedded, built.embeddedTexts, "the reported embed count is the embedder's actual call count");
     assert.equal(built.r.headers, 0, "header leg is dormant by default");
     assert.deepEqual(treeHash(indexRoot, ["slots"]), before, "root slot and sidecars byte-identical");
     const slotDir = join(indexRoot, "slots", "next");
@@ -90,6 +92,8 @@ test("index --build: a build that dies mid-way leaves only <slot>__building, whi
     assert.equal(ok.r.entries, 8);
     assert.equal(ok.r.embedded, 1, "only the new entry's chunk was embedded");
     assert.equal(ok.embeddedTexts, 1);
+    assert.equal(ok.r.embedded, ok.embeddedTexts, "the reported embed count is the embedder's actual call count");
+    assert.equal(ok.r.chunks, (ok.r.vectorsReused ?? 0) + ok.embeddedTexts, "every other chunk kept its vector");
     assert.equal(existsSync(join(root, ".index", "slots", "next__building")), false, "partial dir discarded");
     assert.ok(statSync(join(root, ".index", "slots", "next", "meta.json")).isFile(), "complete slot present");
   } finally {
@@ -113,6 +117,44 @@ test("index --build: with the header leg enabled, header rows are written and th
     const slotDir = join(root, ".index", "slots", "next");
     assert.ok(existsSync(join(slotDir, "memory_headers.lance")), "header table written");
     assert.equal(JSON.parse(readFileSync(join(slotDir, "meta.json"), "utf8")).headerTable, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("defaultBuildName: 'main' only on a store with no index at all, 'next' once there is one to build beside", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-build-default-")));
+  try {
+    const indexRoot = join(root, ".index");
+    assert.equal(defaultBuildName(indexRoot), "main", "no .index/ at all");
+    mkdirSync(indexRoot, { recursive: true });
+    assert.equal(defaultBuildName(indexRoot), "main", "an .index/ with no meta.json is not a built index");
+    writeFileSync(join(indexRoot, "meta.json"), JSON.stringify({ embedderId: "fake", dim: 8, indexVersion: 6 }));
+    assert.equal(defaultBuildName(indexRoot), "next", "the legacy root is built");
+
+    const fresh = realpathSync(mkdtempSync(join(tmpdir(), "pm-build-default2-")));
+    try {
+      const slot = join(fresh, ".index", "slots", "alpha");
+      mkdirSync(slot, { recursive: true });
+      assert.equal(defaultBuildName(join(fresh, ".index")), "main", "a slot dir without meta.json is still unbuilt");
+      writeFileSync(join(slot, "meta.json"), JSON.stringify({ format: 2, indexVersion: 6, embedderId: "fake", dim: 8, catalogVersion: 1, vectorIndex: "flat", headerTable: false, lexical: "fts", builtAt: "2026-01-01T00:00:00.000Z" }));
+      assert.equal(defaultBuildName(join(fresh, ".index")), "next", "a built slot counts even with no legacy root");
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("index --build with no slot name builds 'next' beside the existing index", { timeout: 240_000 }, () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-build-noname-")));
+  try {
+    seedStore(root);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+    const built = runInStore(root, `${COUNTING_EMBEDDER} const b = await import(${BUILD_MOD}); const r = await b.buildSlot({ embedder }); console.log(JSON.stringify(r));`) as Record<string, unknown>;
+    assert.equal(built.slot, "next", "defaults to 'next' when the legacy root is already built");
+    assert.ok(existsSync(join(root, ".index", "slots", "next", "meta.json")), "slot built under its default name");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

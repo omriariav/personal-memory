@@ -180,6 +180,11 @@ function sqlList(ids: string[]): string {
   return ids.map((i) => `'${i}'`).join(", ");
 }
 
+/** The chunk table's primary key. The one place this string is built. */
+export function chunkRowId(id: string, chunkIndex: number): string {
+  return `${id}#${chunkIndex}`;
+}
+
 /** Build the chunk-level records (with vectors) for a set of entries. */
 export async function recordsFor(
   entries: MemoryEntry[],
@@ -190,7 +195,7 @@ export async function recordsFor(
   for (const e of entries) {
     const hash = hashEntry(e);
     chunkEntry(e).forEach((text, chunkIndex) => {
-      const rowId = `${e.id}#${chunkIndex}`;
+      const rowId = chunkRowId(e.id, chunkIndex);
       pending.push({ entry: e, rowId, chunkIndex, text, hash, vector: reuse?.(rowId) });
     });
   }

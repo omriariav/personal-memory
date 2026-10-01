@@ -14,6 +14,7 @@ import {
   SlotMetaSchema,
   buildingDir,
   isSlotName,
+  listBuiltSlots,
   readIndexMetaSync,
   resolveIndexSlotDetailed,
   slotDir,
@@ -25,6 +26,7 @@ import {
   HEADERS_TABLE,
   INDEX_VERSION,
   TABLE,
+  chunkRowId,
   headerLegEnabled,
   headerRecordsFor,
   recordsFor,
@@ -62,6 +64,18 @@ export interface BuildReport {
 
 export function formatBuildReport(r: BuildReport): string {
   return `entries ${r.entries} · vectors reused ${r.vectorsReused} · embedded ${r.embedded} · headers ${r.headers} · ms ${r.ms}`;
+}
+
+/** The slot a build goes to when the caller names none, beside whatever is already in use. */
+export const NEXT_SLOT = "next";
+
+/**
+ * `next` once the store has an index to sit beside (the legacy root, or any
+ * built slot); `main` only on a fresh store with no index at all, where the
+ * new format is not "the next one" but the first.
+ */
+export function defaultBuildName(root: string = INDEX_ROOT): string {
+  return listBuiltSlots(root).length > 0 ? NEXT_SLOT : FRESH_SLOT;
 }
 
 function requireBuildName(name: string): string {
@@ -102,8 +116,8 @@ export async function buildSlot(
   opts: { name?: string; dryRun?: boolean; force?: boolean; embedder?: Embedder; root?: string } = {},
 ): Promise<BuildReport> {
   const t0 = performance.now();
-  const name = requireBuildName(opts.name ?? FRESH_SLOT);
   const root = opts.root ?? INDEX_ROOT;
+  const name = requireBuildName(opts.name ?? defaultBuildName(root));
   const dir = slotDir(name, root);
   const building = buildingDir(name, root);
   const embedder = opts.embedder ?? getEmbedder();
@@ -131,32 +145,45 @@ export async function buildSlot(
   const headerVectors =
     compatible && headersWanted ? await reusableVectors(source.dir, HEADERS_TABLE, wanted, "id") : new Map<string, number[]>();
 
-  const chunkKeys = entries.flatMap((e) => chunkEntry(e).map((_text, i) => `${e.id}#${i}`));
-  const vectorsReused = chunkKeys.filter((k) => chunkVectors.has(k)).length;
-  const counts = {
-    slot: name,
-    dir,
-    entries: entries.length,
-    chunks: chunkKeys.length,
-    vectorsReused,
-    embedded: chunkKeys.length - vectorsReused,
-    headers: headersWanted ? entries.length : 0,
-  };
-  if (dryRun) return done({ ...counts, dryRun: true });
+  if (dryRun) {
+    // The only place a count is predicted rather than measured: the keys come
+    // from `chunkRowId`, the same helper `recordsFor` builds its rows with.
+    const keys = entries.flatMap((e) => chunkEntry(e).map((_text, i) => chunkRowId(e.id, i)));
+    const reused = keys.filter((k) => chunkVectors.has(k)).length;
+    return done({
+      slot: name,
+      dir,
+      entries: entries.length,
+      chunks: keys.length,
+      vectorsReused: reused,
+      embedded: keys.length - reused,
+      headers: headersWanted ? entries.length : 0,
+      dryRun: true,
+    });
+  }
 
   // A previous interrupted build is discarded wholesale — never resumed.
   await rm(building, { recursive: true, force: true });
   await mkdir(building, { recursive: true });
   const db = await lancedb.connect(building);
 
-  const reuseChunk: VectorSource = (rowId) => chunkVectors.get(rowId);
+  // Counted inside the callback `recordsFor` actually calls, so the reported
+  // `embedded` can never disagree with what the embedder was asked for.
+  let vectorsReused = 0;
+  const reuseChunk: VectorSource = (rowId) => {
+    const vector = chunkVectors.get(rowId);
+    if (vector) vectorsReused++;
+    return vector;
+  };
   const chunkRows = entries.length ? ((await recordsFor(entries, embedder, reuseChunk)) as unknown as Record<string, unknown>[]) : [];
   if (chunkRows.length > 0) await db.createTable(TABLE, chunkRows);
 
+  let headers = 0;
   if (headersWanted && entries.length > 0) {
     const reuseHeader: VectorSource = (id) => headerVectors.get(id);
     const headerRows = (await headerRecordsFor(entries, embedder, reuseHeader)) as unknown as Record<string, unknown>[];
     if (headerRows.length > 0) await db.createTable(HEADERS_TABLE, headerRows);
+    headers = headerRows.length;
   }
 
   await syncCatalogTables(db, entries, { root: ROOT });
@@ -178,5 +205,14 @@ export async function buildSlot(
 
   if (opts.force) await rm(dir, { recursive: true, force: true });
   await rename(building, dir);
-  return done({ ...counts, dryRun: false });
+  return done({
+    slot: name,
+    dir,
+    entries: entries.length,
+    chunks: chunkRows.length,
+    vectorsReused,
+    embedded: chunkRows.length - vectorsReused,
+    headers,
+    dryRun: false,
+  });
 }
