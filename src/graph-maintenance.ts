@@ -4,9 +4,9 @@ import matter from "gray-matter";
 import { DEFAULT_GRAPH, FrontmatterSchema, sortGraphs, type Frontmatter, type GraphId, type MemoryEntry } from "./schema.js";
 import { INDEX_DIR, ROOT, writeEntryAll } from "./ingest.js";
 import { storeFor, validateContainment } from "./graphs.js";
-import { openCatalog, type CatalogEntryMeta } from "./catalog.js";
+import type { CatalogEntryMeta } from "./catalog.js";
 import { requireEntry } from "./membership.js";
-import { syncIndex } from "./store.js";
+import { openCatalogForWrite, syncIndex } from "./store.js";
 import { commitMemoryRepo } from "./memory-git.js";
 import { chainAncestry, validateFollowsTargets } from "./chains.js";
 
@@ -355,7 +355,7 @@ export async function readSlugProposals(): Promise<SlugProposal[]> {
  */
 export async function proposeSlugMerge(kind: SlugKind, from: string, to: string, reason: string): Promise<GraphMaintenanceAudit> {
   if (from === to) throw new Error("--from and --to must be different slugs");
-  const stats = countByKind(await (await openCatalog()).all(), kind);
+  const stats = countByKind(await (await openCatalogForWrite()).all(), kind);
   for (const slug of [from, to]) {
     if (!stats.has(slug)) throw new Error(`${kind} '${slug}' does not exist — proposals must reference existing slugs`);
   }
@@ -392,7 +392,7 @@ export async function applyChainLink(opts: {
   follows: string[];
   refreshAudit?: boolean;
 }): Promise<ChainLinkResult> {
-  const catalog = await openCatalog();
+  const catalog = await openCatalogForWrite();
   const entry = await requireEntry(catalog, opts.laterId);
   // The cycle check walks each target's ancestry, so only the chain around the
   // new links has to be loaded — not the corpus.
@@ -452,7 +452,7 @@ export async function readGraphMaintenanceAudit(): Promise<GraphMaintenanceAudit
 }
 
 export async function refreshGraphMaintenanceAudit(): Promise<GraphMaintenanceAudit> {
-  const entries = await (await openCatalog()).all();
+  const entries = await (await openCatalogForWrite()).all();
   const audit = analyzeGraphHygiene(entries, undefined, slugDismissalKeys(await readSlugDismissals()), await readSlugProposals());
   await writeGraphMaintenanceAudit(audit);
   return audit;
@@ -469,9 +469,12 @@ function previewSlugMerge(entries: CatalogEntryMeta[], kind: SlugKind, from: str
   if (!targetExists && !createTarget) {
     throw new Error(`target '${to}' does not exist for ${kind}s; pass --create-target to allow it`);
   }
+  // Newest first, id as the tie-break: without it same-day entries keep the
+  // catalog's order, which is table order on a new-format slot and corpus
+  // order on the legacy one — the printed preview would differ per slot.
   const affected = entries
     .filter((e) => e[field].includes(from))
-    .sort((a, b) => b.date.localeCompare(a.date));
+    .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
   return {
     kind,
     from,
@@ -505,7 +508,7 @@ export async function mergeSlugs(opts: {
   createTarget?: boolean;
   refreshAudit?: boolean;
 }): Promise<SlugMergeResult> {
-  const catalog = await openCatalog();
+  const catalog = await openCatalogForWrite();
   // The whole vocabulary, not just the `from` matches: the target-exists check
   // has to see every entry carrying `to`.
   const metas = await catalog.all();

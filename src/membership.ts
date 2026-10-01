@@ -3,8 +3,8 @@ import { dirname } from "node:path";
 import { DEFAULT_GRAPH, sortGraphs, type MemoryEntry } from "./schema.js";
 import { entryPath, loadEntryFiles, groupEntries, type CopyDrift } from "./ingest.js";
 import { ensureStore, invalidateStoreCache, requireGraph, storeFor, validateContainment } from "./graphs.js";
-import { openCatalog, type Catalog } from "./catalog.js";
-import { syncIndex } from "./store.js";
+import type { Catalog } from "./catalog.js";
+import { openCatalogForWrite, syncIndex } from "./store.js";
 import { commitMemoryRepo } from "./memory-git.js";
 
 /**
@@ -19,6 +19,16 @@ export async function requireEntry(catalog: Catalog, id: string): Promise<Memory
   const [meta] = await catalog.byIds([id]);
   if (!meta) throw new Error(`no entry with id '${id}'`);
   return (await catalog.hydrate([meta]))[0]!;
+}
+
+/**
+ * Id lists the CLI prints verbatim. The catalog returns table order on a
+ * new-format slot and corpus order on the legacy one, so every such list is
+ * sorted by id before it leaves this module — both formats print the same
+ * thing, and the order no longer depends on where an entry sits on disk.
+ */
+function sortedIds(entries: { id: string }[]): string[] {
+  return entries.map((e) => e.id).sort((a, b) => a.localeCompare(b));
 }
 
 export interface SyncStats {
@@ -42,7 +52,7 @@ export async function copyEntry(opts: { id: string; to: string }): Promise<CopyR
   if (to === DEFAULT_GRAPH) {
     throw new Error("copy --to default is meaningless — use 'move <id> --to default' to repatriate");
   }
-  const catalog = await openCatalog();
+  const catalog = await openCatalogForWrite();
   const entry = await requireEntry(catalog, opts.id);
   if (!entry.graphs.includes(DEFAULT_GRAPH)) {
     throw new Error(
@@ -91,7 +101,7 @@ export interface MoveResult {
  */
 export async function moveEntry(opts: { id: string; to: string }): Promise<MoveResult> {
   const to = requireGraph(opts.to);
-  const catalog = await openCatalog();
+  const catalog = await openCatalogForWrite();
   const entry = await requireEntry(catalog, opts.id);
   if (entry.graphs.length === 1 && entry.graphs[0] === to) {
     return { id: entry.id, to, changed: false };
@@ -118,7 +128,7 @@ export async function moveEntry(opts: { id: string; to: string }): Promise<MoveR
       id: entry.id,
       to,
       changed: false,
-      blockedBy: { kind: "referrers", ids: blockingReferrers.map((e) => e.id) },
+      blockedBy: { kind: "referrers", ids: sortedIds(blockingReferrers) },
     };
   }
 
@@ -167,15 +177,15 @@ export interface RemoveResult {
 
 /** Delete every materialization of an entry (content stays in each repo's history). */
 export async function removeEntry(id: string): Promise<RemoveResult> {
-  const catalog = await openCatalog();
+  const catalog = await openCatalogForWrite();
   const target = await requireEntry(catalog, id);
 
   const refs = await catalog.referrers(id);
   const referrers = refs.filter((e) => e.sources?.includes(id));
   if (referrers.length) {
-    return { id, paths: [], graphs: target.graphs, blockedBy: referrers.map((e) => e.id) };
+    return { id, paths: [], graphs: target.graphs, blockedBy: sortedIds(referrers) };
   }
-  const followers = refs.filter((e) => e.follows?.includes(id)).map((e) => e.id);
+  const followers = sortedIds(refs.filter((e) => e.follows?.includes(id)));
 
   for (const g of target.graphs) {
     await commitMemoryRepo(`Checkpoint before remove: ${id}`, storeFor(g).dir);
@@ -213,8 +223,8 @@ export interface DeleteGraphResult {
 export async function deleteGraph(slug: string): Promise<DeleteGraphResult> {
   const graph = requireGraph(slug);
   if (graph === DEFAULT_GRAPH) throw new Error("the default graph cannot be deleted");
-  const members = await (await openCatalog()).filter({ graph });
-  const soleMembers = members.filter((e) => e.graphs.length === 1).map((e) => e.id);
+  const members = await (await openCatalogForWrite()).filter({ graph });
+  const soleMembers = sortedIds(members.filter((e) => e.graphs.length === 1));
   if (soleMembers.length > 0) {
     return { slug: graph, deleted: false, soleMembers, copiesRemoved: 0, rulesRemoved: 0 };
   }

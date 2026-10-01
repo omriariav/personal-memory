@@ -1,9 +1,10 @@
 import { writeFile, mkdir, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import type { OptimizeStats } from "@lancedb/lancedb";
 import { getEmbedder, type Embedder } from "./embed.js";
-import { ROOT, chunkEntry, displayChunkText, entrySearchText, hashEntry, headerText, loadAllEntries } from "./ingest.js";
+import { ROOT, chunkEntry, displayChunkText, entrySearchText, hasAnyEntryFile, hashEntry, headerText, loadAllEntries } from "./ingest.js";
 import { listGraphStores } from "./graphs.js";
 import {
   CATALOG_VERSION,
@@ -29,7 +30,7 @@ import {
   syncCatalogTables,
   writeManifest,
 } from "./catalog-sync.js";
-import { openCatalog } from "./catalog.js";
+import { openCatalog, type Catalog } from "./catalog.js";
 import { packSlugs, type GraphId, type MemoryEntry, type MemoryRecord } from "./schema.js";
 import { LEXICAL_PATH, syncLexical, tokenize } from "./lexical.js";
 import { buildChainIndex, type ChainAnnotation } from "./chains.js";
@@ -474,6 +475,29 @@ export async function syncIndex(
 
   const first = slots[0]!;
   return { added: first.added, removed: first.removed, unchanged: first.unchanged, slots };
+}
+
+/**
+ * The catalog a WRITE reads through.
+ *
+ * A read refuses an unbuilt slot (`openCatalog`) so that asking a question can
+ * never silently materialize an index. A writer may not refuse: `add`, `copy`,
+ * `move`, `remove`, `link` and the slug writers have always worked on a store
+ * whose `.index/` was never built, and built it on the way out. So an unbuilt
+ * new-format slot is indexed FIRST and then opened — the same `syncIndex` the
+ * write would have run at the end, just moved ahead of the read it needs.
+ *
+ * Nothing happens for a legacy slot (it parses Markdown directly), for an
+ * already-built slot, or for a store with no entries at all (`EmptyCatalog`).
+ * An explicitly named slot always exists — `resolveIndexSlotDetailed` rejects
+ * an unknown one — so the branch below is only ever the implicit fresh slot.
+ */
+export async function openCatalogForWrite(slot?: string): Promise<Catalog> {
+  const r = resolveIndexSlotDetailed(slot ? { override: slot } : {});
+  if (r.format === 2 && !existsSync(metaPath(r.dir)) && (await hasAnyEntryFile())) {
+    await syncIndex();
+  }
+  return openCatalog(slot ? { slot } : {});
 }
 
 export interface IndexStatus {

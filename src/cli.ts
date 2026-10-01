@@ -12,7 +12,7 @@ import {
   normalizeSourceId,
   ROOT,
 } from "./ingest.js";
-import { search, findSimilar, syncIndex, type SearchCompleteness, type SearchFilters } from "./store.js";
+import { search, findSimilar, openCatalogForWrite, syncIndex, type SearchCompleteness, type SearchFilters } from "./store.js";
 import { DEFAULT_GRAPH, sharedGraphs, type GraphId, type MemoryEntry } from "./schema.js";
 import {
   createGraph,
@@ -180,7 +180,8 @@ async function cmdAdd(argv: string[]) {
   const capturedConnectors = await resolveCapturedConnectors(sourceIds, list(values.connector as string));
   const uniq = (xs: string[]) => [...new Set(xs)];
   const requestedGraph: GraphId = values.graph ? requireGraph(values.graph) : DEFAULT_GRAPH;
-  const catalog = await openCatalog();
+  // A capture never requires a pre-built index — see `openCatalogForWrite`.
+  const catalog = await openCatalogForWrite();
 
   // --- resolve the target: an existing entry to update in place, or a new one ---
   let target: MemoryEntry | undefined;
