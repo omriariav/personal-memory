@@ -109,13 +109,24 @@ const t0 = performance.now();
 const sync = await store.syncIndex();
 const buildMs = Math.round(performance.now() - t0);
 console.error(`index: +${sync.added} −${sync.removed} unchanged ${sync.unchanged} in ${(buildMs / 1000).toFixed(1)} s`);
-// Header rows are backfilled in bounded batches in production; the harness
-// evaluates the fully filled state so HEADER_LEG_WEIGHT sweeps mean something.
-for (;;) {
-  const h = await store.backfillHeaders({ batch: 2000 });
-  if (h.embedded > 0) console.error(`headers: +${h.embedded}, ${h.remaining} remaining`);
-  if (h.remaining === 0) break;
+/**
+ * Fill every missing header row of the slot `backfillHeaders` currently
+ * resolves to. Header rows are backfilled in bounded batches in production;
+ * the harness evaluates the fully filled state so HEADER_LEG_WEIGHT sweeps
+ * mean something. A no-op while the header leg is dormant.
+ */
+async function fillHeaders(): Promise<void> {
+  for (;;) {
+    const h = await store.backfillHeaders({ batch: 2000 });
+    if (h.embedded > 0) console.error(`headers: +${h.embedded}, ${h.remaining} remaining`);
+    if (h.remaining === 0) break;
+  }
 }
+
+// Fills the slot the run reads when no --index-slot is given, AND the slot a
+// --index-slot build copies its header vectors from, so that build embeds
+// nothing.
+await fillHeaders();
 
 // Optional: evaluate a new-format slot. Built on first use from the corpus'
 // legacy index (vectors reused by (id, hash)); writers above already keep it
@@ -133,6 +144,10 @@ if (slotName) {
   // the truth after the lexical default moves.
   const { lexicalMode } = await import("../src/catalog.js");
   console.error(`slot: ${slotName} (MEMORY_LEXICAL=${lexicalMode()})`);
+  // `backfillHeaders` resolves the slot per call, so this one tops up the
+  // EVALUATED slot — the fill above only ever reached the default slot. A
+  // no-op once the build has copied every header vector across.
+  await fillHeaders();
 }
 
 // warm-up (model load) — excluded from per-case latency
