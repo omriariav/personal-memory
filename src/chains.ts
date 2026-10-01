@@ -102,14 +102,18 @@ export function entryStatus(
     : { status: "open" };
 }
 
+/** The slice of an entry the `follows` guards read — a catalog meta satisfies it. */
+export type FollowsSource = Pick<MemoryEntry, "id" | "date" | "follows">;
+
 /**
  * Write-time guard for new `follows` links: every target must exist, be no
  * newer than the follower, not be the follower itself, and not already follow
  * the follower (directly or transitively) — so the CLI can never create a
  * cycle. `source` may be an entry that does not exist yet (a fresh capture).
+ * `entries` must cover each target's ancestry (see `chainAncestry`).
  */
 export function validateFollowsTargets(
-  entries: MemoryEntry[],
+  entries: FollowsSource[],
   source: { id: string; date: string },
   targets: string[],
 ): void {
@@ -139,6 +143,26 @@ export function validateFollowsTargets(
       queue.push(...(byId.get(cur)?.follows ?? []));
     }
   }
+}
+
+/**
+ * Transitive `follows` ancestry of `ids` (the ids themselves included),
+ * fetched in BFS batches through `lookup` — the catalog-backed input
+ * `validateFollowsTargets` needs when the whole corpus is not in memory.
+ * Cycle-safe: an id is looked up at most once.
+ */
+export async function chainAncestry(
+  lookup: (ids: string[]) => Promise<FollowsSource[]>,
+  ids: string[],
+): Promise<FollowsSource[]> {
+  const seen = new Map<string, FollowsSource>();
+  let frontier = [...new Set(ids)];
+  while (frontier.length) {
+    const batch = await lookup(frontier.filter((id) => !seen.has(id)));
+    for (const e of batch) seen.set(e.id, e);
+    frontier = [...new Set(batch.flatMap((e) => e.follows ?? []))].filter((id) => !seen.has(id));
+  }
+  return [...seen.values()];
 }
 
 /**

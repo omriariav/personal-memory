@@ -1,8 +1,9 @@
 import { readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { DEFAULT_GRAPH, sortGraphs, type MemoryEntry } from "./schema.js";
-import { entryPath, loadAllEntries, loadEntryFiles, groupEntries, type CopyDrift } from "./ingest.js";
+import { entryPath, loadEntryFiles, groupEntries, type CopyDrift } from "./ingest.js";
 import { ensureStore, invalidateStoreCache, requireGraph, storeFor, validateContainment } from "./graphs.js";
+import { openCatalog, type Catalog } from "./catalog.js";
 import { syncIndex } from "./store.js";
 import { commitMemoryRepo } from "./memory-git.js";
 
@@ -12,6 +13,13 @@ import { commitMemoryRepo } from "./memory-git.js";
  * materializations, and repair drift. Used by the CLI and the UI server —
  * never reimplemented elsewhere.
  */
+
+/** The one entry a membership write acts on, with its body — `byIds` + `hydrate`. */
+export async function requireEntry(catalog: Catalog, id: string): Promise<MemoryEntry> {
+  const [meta] = await catalog.byIds([id]);
+  if (!meta) throw new Error(`no entry with id '${id}'`);
+  return (await catalog.hydrate([meta]))[0]!;
+}
 
 export interface SyncStats {
   added: number;
@@ -34,9 +42,8 @@ export async function copyEntry(opts: { id: string; to: string }): Promise<CopyR
   if (to === DEFAULT_GRAPH) {
     throw new Error("copy --to default is meaningless — use 'move <id> --to default' to repatriate");
   }
-  const entries = await loadAllEntries();
-  const entry = entries.find((e) => e.id === opts.id);
-  if (!entry) throw new Error(`no entry with id '${opts.id}'`);
+  const catalog = await openCatalog();
+  const entry = await requireEntry(catalog, opts.id);
   if (!entry.graphs.includes(DEFAULT_GRAPH)) {
     throw new Error(
       `'${opts.id}' is not a default-graph member (graphs: ${entry.graphs.join(", ")}) — ` +
@@ -46,8 +53,8 @@ export async function copyEntry(opts: { id: string; to: string }): Promise<CopyR
   if (entry.graphs.includes(to)) return { id: entry.id, to, changed: false };
 
   // Containment: everything this entry references must already be in `to`.
-  const byId = new Map(entries.map((e) => [e.id, e]));
   const refs = [...(entry.follows ?? []), ...(entry.sources ?? [])];
+  const byId = new Map((await catalog.byIds(refs)).map((t) => [t.id, t]));
   const blockedBy = refs.filter((r) => {
     const t = byId.get(r);
     return t !== undefined && !t.graphs.includes(to);
@@ -84,16 +91,15 @@ export interface MoveResult {
  */
 export async function moveEntry(opts: { id: string; to: string }): Promise<MoveResult> {
   const to = requireGraph(opts.to);
-  const entries = await loadAllEntries();
-  const entry = entries.find((e) => e.id === opts.id);
-  if (!entry) throw new Error(`no entry with id '${opts.id}'`);
+  const catalog = await openCatalog();
+  const entry = await requireEntry(catalog, opts.id);
   if (entry.graphs.length === 1 && entry.graphs[0] === to) {
     return { id: entry.id, to, changed: false };
   }
 
-  const byId = new Map(entries.map((e) => [e.id, e]));
   if (to !== DEFAULT_GRAPH) {
     const refs = [...(entry.follows ?? []), ...(entry.sources ?? [])];
+    const byId = new Map((await catalog.byIds(refs)).map((t) => [t.id, t]));
     const violators = refs.filter((r) => {
       const t = byId.get(r);
       return t !== undefined && !t.graphs.includes(to);
@@ -103,13 +109,10 @@ export async function moveEntry(opts: { id: string; to: string }): Promise<MoveR
     }
   }
   const leaving = entry.graphs.filter((g) => g !== to);
-  const blockingReferrers = entries.filter((e) => {
-    if (e.id === entry.id) return false;
-    const refsEntry = (e.follows?.includes(entry.id) ?? false) || (e.sources?.includes(entry.id) ?? false);
-    if (!refsEntry) return false;
-    // A referrer blocks when it sits in a shared graph the entry is leaving.
-    return e.graphs.some((g) => g !== DEFAULT_GRAPH && leaving.includes(g));
-  });
+  // A referrer blocks when it sits in a shared graph the entry is leaving.
+  const blockingReferrers = (await catalog.referrers(entry.id)).filter(
+    (e) => e.id !== entry.id && e.graphs.some((g) => g !== DEFAULT_GRAPH && leaving.includes(g)),
+  );
   if (blockingReferrers.length > 0) {
     return {
       id: entry.id,
@@ -164,15 +167,15 @@ export interface RemoveResult {
 
 /** Delete every materialization of an entry (content stays in each repo's history). */
 export async function removeEntry(id: string): Promise<RemoveResult> {
-  const entries = await loadAllEntries();
-  const target = entries.find((e) => e.id === id);
-  if (!target) throw new Error(`no entry with id '${id}'`);
+  const catalog = await openCatalog();
+  const target = await requireEntry(catalog, id);
 
-  const referrers = entries.filter((e) => e.sources?.includes(id));
+  const refs = await catalog.referrers(id);
+  const referrers = refs.filter((e) => e.sources?.includes(id));
   if (referrers.length) {
     return { id, paths: [], graphs: target.graphs, blockedBy: referrers.map((e) => e.id) };
   }
-  const followers = entries.filter((e) => e.follows?.includes(id)).map((e) => e.id);
+  const followers = refs.filter((e) => e.follows?.includes(id)).map((e) => e.id);
 
   for (const g of target.graphs) {
     await commitMemoryRepo(`Checkpoint before remove: ${id}`, storeFor(g).dir);
@@ -210,8 +213,7 @@ export interface DeleteGraphResult {
 export async function deleteGraph(slug: string): Promise<DeleteGraphResult> {
   const graph = requireGraph(slug);
   if (graph === DEFAULT_GRAPH) throw new Error("the default graph cannot be deleted");
-  const entries = await loadAllEntries();
-  const members = entries.filter((e) => e.graphs.includes(graph));
+  const members = await (await openCatalog()).filter({ graph });
   const soleMembers = members.filter((e) => e.graphs.length === 1).map((e) => e.id);
   if (soleMembers.length > 0) {
     return { slug: graph, deleted: false, soleMembers, copiesRemoved: 0, rulesRemoved: 0 };

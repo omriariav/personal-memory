@@ -4,13 +4,11 @@ import { dirname, relative } from "node:path";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { FrontmatterSchema, type Frontmatter } from "./schema.js";
 import {
-  loadAllEntries,
   makeId,
   writeEntry,
   writeEntryAll,
   entryPath,
   hashEntry,
-  findEntryBySourceIds,
   normalizeSourceId,
   ROOT,
 } from "./ingest.js";
@@ -26,7 +24,7 @@ import {
 } from "./graphs.js";
 import { copyEntry, deleteGraph, moveEntry, removeEntry, syncGraphs } from "./membership.js";
 import { commitMemoryRepo } from "./memory-git.js";
-import { buildChainIndex, entryStatus, validateFollowsTargets, type ChainAnnotation } from "./chains.js";
+import { buildChainIndex, chainAncestry, entryStatus, validateFollowsTargets, type ChainAnnotation } from "./chains.js";
 import { applyChainLink, dismissSlugSuggestion, mergeSlugs, proposeSlugMerge, slugUsage, type SlugKind } from "./graph-maintenance.js";
 import { recall, type RecallReport } from "./recall.js";
 import { resolveIndexSlotDetailed } from "./index-slots.js";
@@ -182,15 +180,17 @@ async function cmdAdd(argv: string[]) {
   const capturedConnectors = await resolveCapturedConnectors(sourceIds, list(values.connector as string));
   const uniq = (xs: string[]) => [...new Set(xs)];
   const requestedGraph: GraphId = values.graph ? requireGraph(values.graph) : DEFAULT_GRAPH;
-  const entries = await loadAllEntries();
+  const catalog = await openCatalog();
 
   // --- resolve the target: an existing entry to update in place, or a new one ---
   let target: MemoryEntry | undefined;
   if (values.update) {
-    target = entries.find((e) => e.id === values.update);
-    if (!target) throw new Error(`--update: no entry with id '${values.update}'`);
+    const [meta] = await catalog.byIds([values.update as string]);
+    if (!meta) throw new Error(`--update: no entry with id '${values.update}'`);
+    target = (await catalog.hydrate([meta]))[0]!;
   } else if (sourceIds.length) {
-    target = findEntryBySourceIds(entries, sourceIds);
+    const [meta] = await catalog.bySourceIds(sourceIds);
+    target = meta ? (await catalog.hydrate([meta]))[0]! : undefined;
     if (target) {
       const matched = sourceIds.find((s) => (target!.source_ids ?? []).includes(s));
       console.log(`↻ matches existing ${target.id} via ${matched}`);
@@ -227,7 +227,8 @@ async function cmdAdd(argv: string[]) {
   if (follows.length) {
     const sourceId = target?.id ?? ((values.id as string) || makeId(date, title));
     const sourceDate = target?.date ?? date;
-    validateFollowsTargets(entries, { id: sourceId, date: sourceDate }, follows);
+    const ancestry = await chainAncestry((ids) => catalog.byIds(ids), follows);
+    validateFollowsTargets(ancestry, { id: sourceId, date: sourceDate }, follows);
   }
   const mergedFollows = uniq([...(target?.follows ?? []), ...follows]);
 
@@ -264,7 +265,7 @@ async function cmdAdd(argv: string[]) {
 
   // --- a brand-new id must be unique across ALL stores (chains/index/move key by id) ---
   if (!target) {
-    const collision = entries.find((e) => e.id === fm.id);
+    const [collision] = await catalog.byIds([fm.id]);
     if (collision) {
       throw new Error(
         `id '${fm.id}' already exists (graphs: ${collision.graphs.join(",")}; ${rel(collision.path)})\n` +
@@ -275,11 +276,9 @@ async function cmdAdd(argv: string[]) {
 
   // --- containment guard: a shared-graph entry only references fellow members ---
   {
-    const byId = new Map(entries.map((e) => [e.id, e]));
-    validateContainment(byId, { id: fm.id, graphs }, [
-      ...(fm.follows ?? []),
-      ...(fm.sources ?? []),
-    ]);
+    const refs = [...(fm.follows ?? []), ...(fm.sources ?? [])];
+    const byId = new Map((await catalog.byIds(refs)).map((t) => [t.id, t]));
+    validateContainment(byId, { id: fm.id, graphs }, refs);
   }
 
   // --- idempotency: skip a re-capture whose content is identical (hash ignores `updated`) ---
@@ -506,7 +505,7 @@ async function cmdGraphs(argv: string[]) {
     return;
   }
   if (sub === "list" || sub === undefined) {
-    const entries = await loadAllEntries();
+    const entries = await (await openCatalog()).all();
     for (const store of listGraphStores()) {
       const count = entries.filter((e) => e.graphs.includes(store.graph)).length;
       const manifest = store.graph === DEFAULT_GRAPH ? null : await loadGraphManifest(store);
@@ -1109,7 +1108,7 @@ async function cmdSlugsList(argv: string[]) {
   const kind = requireSlugKind(values.kind);
   const minCount = positiveInt(values["min-count"], 1, "--min-count");
 
-  const entries = await loadAllEntries();
+  const entries = await (await openCatalog()).all();
   const usage = slugUsage(entries, kind).filter((s) => s.count >= minCount);
   for (const s of usage) {
     console.log(`${String(s.count).padStart(4)}  ${s.slug}  (last seen ${s.lastSeen ?? "n/a"})`);
