@@ -233,6 +233,20 @@ export function missingIndexMessage(slot: string): string {
 }
 
 /**
+ * Thrown by `openCatalog` for the one failure mode it documents: a
+ * format-2 slot with entries on disk but no index built yet. A typed
+ * subclass (rather than a bare `Error`) lets a caller that must answer
+ * SOMETHING on this specific failure (the UI server, with a 503) tell it
+ * apart from an unrelated throw it should not swallow.
+ */
+export class MissingIndexError extends Error {
+  constructor(readonly slot: string) {
+    super(missingIndexMessage(slot));
+    this.name = "MissingIndexError";
+  }
+}
+
+/**
  * A store with no entries and no index: every read is legitimately empty.
  * Answers from nothing and touches no file, so asking an empty store a
  * question never creates the slot it would eventually be indexed into.
@@ -294,7 +308,7 @@ export async function openCatalog(opts: { slot?: string } = {}): Promise<Catalog
   const r = resolveIndexSlotDetailed(opts.slot ? { override: opts.slot } : {});
   if (r.format === 1) return new LegacyCatalog(r.slot, r.dir);
   if (!existsSync(join(r.dir, META_FILENAME))) {
-    if (await hasAnyEntryFile()) throw new Error(missingIndexMessage(r.slot));
+    if (await hasAnyEntryFile()) throw new MissingIndexError(r.slot);
     return new EmptyCatalog(r.slot, r.dir);
   }
   const { LanceCatalog } = await import("./catalog-lance.js");

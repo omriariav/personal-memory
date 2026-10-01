@@ -4,7 +4,25 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ServerResponse } from "node:http";
 import { REPO, STORE_MOD, runInStore, seedStore } from "./test-store.js";
+import { openCatalogOr503 } from "./server.js";
+import { MissingIndexError } from "./catalog.js";
+
+/** A minimal stand-in for `ServerResponse` that records what the handler sent. */
+function fakeRes(): { res: ServerResponse; sent: { status?: number; body?: unknown } } {
+  const sent: { status?: number; body?: unknown } = {};
+  const res = {
+    writeHead(status: number) {
+      sent.status = status;
+      return res;
+    },
+    end(body: string) {
+      sent.body = JSON.parse(body);
+    },
+  } as unknown as ServerResponse;
+  return { res, sent };
+}
 
 async function withServer<T>(cwd: string, env: Record<string, string>, fn: (base: string) => Promise<T>): Promise<T> {
   const port = 41000 + Math.floor(Math.random() * 2000);
@@ -60,6 +78,33 @@ test("UI API reads via the catalog: /api/data, /api/graphs, /api/graphs/<slug>, 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("openCatalogOr503 converts only MissingIndexError to a 503, with its message", async () => {
+  const { res, sent } = fakeRes();
+  const catalog = await openCatalogOr503(res, async () => {
+    throw new MissingIndexError("main");
+  });
+  assert.equal(catalog, undefined, "no catalog is returned on the missing-index path");
+  assert.equal(sent.status, 503, "the missing-index case answers 503");
+  assert.match(
+    (sent.body as { error: string }).error,
+    /no index built for slot "main"/,
+    "the response body carries the catalog's own fix-it message",
+  );
+});
+
+test("openCatalogOr503 rethrows any other error instead of answering 503", async () => {
+  const { res, sent } = fakeRes();
+  await assert.rejects(
+    () =>
+      openCatalogOr503(res, async () => {
+        throw new Error("disk fell over");
+      }),
+    /disk fell over/,
+    "an unrelated failure propagates instead of being swallowed",
+  );
+  assert.equal(sent.status, undefined, "nothing was written to the response for a non-missing-index error");
 });
 
 test("/api/data returns 503 with the fix-it message when the resolved slot has entries but no index", async () => {

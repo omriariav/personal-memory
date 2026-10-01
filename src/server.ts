@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { ROOT } from "./ingest.js";
 import { search, indexStatus, type SearchFilters } from "./store.js";
-import { openCatalog } from "./catalog.js";
+import { MissingIndexError, openCatalog, type Catalog } from "./catalog.js";
 import { loadConnectors, loadConnectorState, writeConnector, relConnector } from "./connectors.js";
 import {
   DEFAULT_GRAPH,
@@ -79,18 +79,27 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 /**
  * Open the active slot's catalog for a read endpoint. A read never builds a
- * slot (see catalog.ts), so an unbuilt format-2 slot throws — that is the
- * one failure mode `openCatalog` documents, so any throw here is reported as
- * a 503 with the CLI's own fix-it message rather than surfacing as a 500.
- * Returns `undefined` (having already responded) when the catalog could not
- * be opened.
+ * slot (see catalog.ts), so an unbuilt format-2 slot throws `MissingIndexError`
+ * — the one failure mode `openCatalog` documents — which is reported as a 503
+ * with the CLI's own fix-it message rather than surfacing as a 500. Any OTHER
+ * throw (I/O error, programming bug) is rethrown so the request handler's own
+ * catch logs it and answers 500 — it must never be mistaken for the benign
+ * "no index yet" case. `open` is injectable for unit tests only; production
+ * callers always use the default. Returns `undefined` (having already
+ * responded) when the catalog could not be opened.
  */
-async function openCatalogOr503(res: ServerResponse): Promise<Awaited<ReturnType<typeof openCatalog>> | undefined> {
+export async function openCatalogOr503(
+  res: ServerResponse,
+  open: () => Promise<Catalog> = openCatalog,
+): Promise<Catalog | undefined> {
   try {
-    return await openCatalog();
+    return await open();
   } catch (err) {
-    sendJson(res, 503, { error: err instanceof Error ? err.message : String(err) });
-    return undefined;
+    if (err instanceof MissingIndexError) {
+      sendJson(res, 503, { error: err.message });
+      return undefined;
+    }
+    throw err;
   }
 }
 
