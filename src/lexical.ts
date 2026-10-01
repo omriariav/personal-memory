@@ -10,7 +10,7 @@ import type { MemoryEntry } from "./schema.js";
  * (a version bump or deleted file just triggers a rebuild).
  */
 
-const LEXICAL_PATH = join(INDEX_DIR, "lexical.json");
+export const LEXICAL_PATH = join(INDEX_DIR, "lexical.json");
 const LEXICAL_VERSION = 3; // 3: records titleRepeat
 
 interface LexDoc {

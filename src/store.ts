@@ -1,12 +1,34 @@
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import type { OptimizeStats } from "@lancedb/lancedb";
 import { getEmbedder, type Embedder } from "./embed.js";
-import { chunkEntry, displayChunkText, entrySearchText, hashEntry, headerText, loadAllEntries } from "./ingest.js";
-import { META_FILENAME, readIndexMetaSync, resolveIndexSlotDetailed, type IndexMeta, type SlotResolution } from "./index-slots.js";
+import { ROOT, chunkEntry, displayChunkText, entrySearchText, hashEntry, headerText, loadAllEntries } from "./ingest.js";
+import { listGraphStores } from "./graphs.js";
+import {
+  CATALOG_VERSION,
+  META_FILENAME,
+  SlotMetaSchema,
+  listBuiltSlots,
+  readIndexMetaSync,
+  resolveIndexSlotDetailed,
+  slotDir,
+  slotFormat,
+  type IndexMeta,
+  type SlotMeta,
+  type SlotResolution,
+} from "./index-slots.js";
+import {
+  dropCatalogTables,
+  ensureCatalogIndices,
+  manifestFor,
+  readManifest,
+  scanDirMtimes,
+  syncCatalogTables,
+  writeManifest,
+} from "./catalog-sync.js";
 import { packSlugs, type GraphId, type MemoryEntry, type MemoryRecord } from "./schema.js";
-import { ensureLexical, syncLexical, bm25Scores, tokenize } from "./lexical.js";
+import { LEXICAL_PATH, ensureLexical, syncLexical, bm25Scores, tokenize } from "./lexical.js";
 import { buildChainIndex, type ChainAnnotation } from "./chains.js";
 import {
   applyFilters,
@@ -224,26 +246,53 @@ export async function recordsFor(
   }));
 }
 
-/**
- * Incrementally sync the vector index with the Markdown source of truth.
- * Re-embeds only entries whose content hash changed; drops deleted entries.
- * Rebuilds from scratch if the embedder (model/dim) changed.
- */
-export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
+export interface SlotSyncStats {
+  slot: string;
+  format: 1 | 2;
   added: number;
   removed: number;
   unchanged: number;
-}> {
-  const embedder = getEmbedder();
-  const entries = await loadAllEntries();
-  const dir = indexDir();
-  await mkdir(dir, { recursive: true });
-  const db = await lancedb.connect(dir);
+}
 
+export interface SyncIndexResult {
+  /** The active slot's numbers (what existing callers print). */
+  added: number;
+  removed: number;
+  unchanged: number;
+  slots: SlotSyncStats[];
+}
+
+/**
+ * Supplies the rows for a set of changed entries. Shared across slots by
+ * `syncIndex` so a changed chunk is embedded exactly once no matter how many
+ * slots hold it; rows are keyed by entry id, never reused wholesale, because
+ * graph membership is not covered by the content hash.
+ */
+type RecordSource = (changed: MemoryEntry[]) => Promise<MemoryRecord[]>;
+type HeaderSource = (changed: MemoryEntry[]) => Promise<HeaderRecord[]>;
+
+/**
+ * Sync ONE slot's chunk (and header) tables against the Markdown source of
+ * truth: re-embed only entries whose content hash or graph membership
+ * changed, drop deleted ones, rebuild from scratch when the embedder, the row
+ * schema or (format 2) the catalog version moved on. Writes that slot's
+ * meta.json in its own format.
+ */
+async function syncSlotVectors(
+  db: lancedb.Connection,
+  dir: string,
+  format: 1 | 2,
+  entries: MemoryEntry[],
+  embedder: Embedder,
+  opts: { force: boolean; records: RecordSource; headers: HeaderSource },
+): Promise<{ added: number; removed: number; unchanged: number }> {
   const meta = await readMeta(dir);
   const embedderChanged = !meta || meta.embedderId !== embedder.id || meta.dim !== embedder.dim;
   const versionChanged = meta?.indexVersion !== INDEX_VERSION;
-  const force = opts.force || embedderChanged || versionChanged;
+  // A format-2 slot whose meta predates the current catalog layout is rebuilt
+  // rather than topped up — its derived tables are not comparable.
+  const catalogChanged = format === 2 && (meta?.format !== 2 || meta.catalogVersion !== CATALOG_VERSION);
+  const force = opts.force || embedderChanged || versionChanged || catalogChanged;
 
   if (force) {
     const names = await db.tableNames();
@@ -281,7 +330,7 @@ export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
     await table.delete(`id IN (${sqlList(toDelete)})`);
   }
 
-  const newRecords = changed.length ? await recordsFor(changed, embedder) : [];
+  const newRecords = changed.length ? await opts.records(changed) : [];
   if (newRecords.length > 0) {
     const rows = newRecords as unknown as Record<string, unknown>[];
     if (!table) {
@@ -297,11 +346,93 @@ export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
   // (or nothing, until the backfill reaches them).
   const headers = await openHeaders(db);
   if (headers && removedIds.length > 0) await headers.delete(`id IN (${sqlList(removedIds)})`);
-  if (changed.length > 0 && headerLegEnabled()) await upsertHeaders(db, await headerRecordsFor(changed, embedder));
+  if (changed.length > 0 && headerLegEnabled()) await upsertHeaders(db, await opts.headers(changed));
 
-  await writeLegacyMeta(dir, { embedderId: embedder.id, dim: embedder.dim, indexVersion: INDEX_VERSION });
-  await syncLexical(entries);
+  if (format === 1) {
+    await writeLegacyMeta(dir, { embedderId: embedder.id, dim: embedder.dim, indexVersion: INDEX_VERSION });
+  } else {
+    // `builtAt` and the header-table flag belong to the build that created the
+    // slot; a sync refreshes the rest without re-dating it.
+    const previous = meta?.format === 2 ? meta : null;
+    const next: SlotMeta = SlotMetaSchema.parse({
+      format: 2,
+      indexVersion: INDEX_VERSION,
+      embedderId: embedder.id,
+      dim: embedder.dim,
+      catalogVersion: CATALOG_VERSION,
+      vectorIndex: "flat",
+      headerTable: previous?.headerTable ?? headerLegEnabled(),
+      lexical: "fts",
+      builtAt: previous?.builtAt ?? new Date().toISOString(),
+    } satisfies SlotMeta);
+    await mkdir(dir, { recursive: true });
+    await writeFile(metaPath(dir), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  }
   return { added: changed.length, removed: removedIds.length, unchanged };
+}
+
+/**
+ * Incrementally sync the index with the Markdown source of truth — for the
+ * active slot AND every other built slot, so a `next` slot under evaluation
+ * never goes stale behind the one in use. Entries are embedded once and the
+ * resulting rows are shared across the slots that need them.
+ *
+ * `rebuild` drops and rebuilds the derived catalog/lexical tables of every
+ * slot it touches, keeping their vectors; `force` drops the vectors too.
+ */
+export async function syncIndex(
+  opts: { force?: boolean; rebuild?: boolean; slots?: "active" | "all" } = {},
+): Promise<SyncIndexResult> {
+  const embedder = getEmbedder();
+  const entries = await loadAllEntries();
+  const active = currentSlot();
+  const names =
+    opts.slots === "active"
+      ? [active.slot]
+      : [active.slot, ...listBuiltSlots().map((s) => s.name).filter((n) => n !== active.slot)];
+
+  // One embedding pass for all slots: rows are computed on first demand and
+  // replayed per entry id afterwards.
+  const chunkMemo = new Map<string, MemoryRecord[]>();
+  const records: RecordSource = async (changed) => {
+    const missing = changed.filter((e) => !chunkMemo.has(e.id));
+    if (missing.length > 0) {
+      for (const e of missing) chunkMemo.set(e.id, []);
+      for (const r of await recordsFor(missing, embedder)) chunkMemo.get(r.id)!.push(r);
+    }
+    return changed.flatMap((e) => chunkMemo.get(e.id) ?? []);
+  };
+  const headerMemo = new Map<string, HeaderRecord>();
+  const headers: HeaderSource = async (changed) => {
+    const missing = changed.filter((e) => !headerMemo.has(e.id));
+    if (missing.length > 0) for (const r of await headerRecordsFor(missing, embedder)) headerMemo.set(r.id, r);
+    return changed.flatMap((e) => {
+      const r = headerMemo.get(e.id);
+      return r ? [r] : [];
+    });
+  };
+
+  const slots: SlotSyncStats[] = [];
+  for (const slot of names) {
+    const dir = slotDir(slot);
+    const format = slotFormat(slot);
+    await mkdir(dir, { recursive: true });
+    const db = await lancedb.connect(dir);
+    const r = await syncSlotVectors(db, dir, format, entries, embedder, { force: Boolean(opts.force), records, headers });
+    if (format === 1) {
+      // The legacy slot's lexical leg: `.index/lexical.json`, shape frozen.
+      if (opts.rebuild) await rm(LEXICAL_PATH, { force: true });
+      await syncLexical(entries);
+    } else {
+      if (opts.rebuild) await dropCatalogTables(db);
+      await syncCatalogTables(db, entries, { root: ROOT });
+      await ensureCatalogIndices(db);
+      await writeManifest(dir, await manifestFor(db, await scanDirMtimes(listGraphStores(), ROOT), await readManifest(dir)));
+    }
+    slots.push({ slot, format, added: r.added, removed: r.removed, unchanged: r.unchanged });
+  }
+  const first = slots[0]!;
+  return { added: first.added, removed: first.removed, unchanged: first.unchanged, slots };
 }
 
 export interface IndexStatus {

@@ -298,6 +298,7 @@ async function cmdAdd(argv: string[]) {
   console.log(`✓ ${target ? "updated" : "created"} ${fm.id}${label}`);
   console.log(`  ${rel(path)}`);
   console.log(`  indexed (+${stats.added} changed, ${stats.unchanged} unchanged)`);
+  for (const s of stats.slots.slice(1)) console.log(`  ↻ synced slot ${s.slot}`);
   const captured = await markCapturedConnectors(capturedConnectors);
   if (captured.length) console.log(`  connector captured: ${captured.join(", ")}`);
 
@@ -513,6 +514,8 @@ async function cmdIndex(argv: string[]) {
     args,
     options: {
       force: { type: "boolean" },
+      reembed: { type: "boolean" },
+      rebuild: { type: "boolean" },
       optimize: { type: "boolean" },
       "header-batch": { type: "string" },
       build: { type: "string" },
@@ -534,10 +537,15 @@ async function cmdIndex(argv: string[]) {
     return;
   }
   if (values["dry-run"]) throw new Error("usage: --dry-run applies only to: memory index --build <slot> [--dry-run]");
-  const stats = await syncIndex({ force: Boolean(values.force) });
+  const stats = await syncIndex({ force: Boolean(values.force || values.reembed), rebuild: Boolean(values.rebuild) });
   console.log(
     `✓ index synced — ${stats.added} (re)embedded, ${stats.removed} removed, ${stats.unchanged} unchanged`,
   );
+  // The active slot is stats.slots[0]; the rest are the other built slots,
+  // kept in step so a slot under evaluation never drifts from the source.
+  for (const s of stats.slots.slice(1)) {
+    console.log(`  ↻ synced slot ${s.slot} (+${s.added} changed, ${s.removed} removed)`);
+  }
   if (values.optimize) {
     const { optimizeIndex } = await import("./store.js");
     const r = await optimizeIndex(7, { headerBatch: positiveInt(values["header-batch"], 500, "--header-batch") });
@@ -1199,7 +1207,7 @@ Usage:
   memory graphs delete <slug> --confirm  # PERMANENT: blocked while entries exist only there; user must approve
   memory rules [list]                  # standing distribution rules (memory/graphs/rules.json)
   memory rules apply [--dry-run]       # reconcile all rules against existing private entries
-  memory index [--force] [--optimize [--header-batch N]]   # --optimize compacts + backfills title vectors (memory_headers) in bounded batches
+  memory index [--force|--reembed] [--rebuild] [--optimize [--header-batch N]]   # --rebuild: rebuild the synced slots' catalog/lexical tables reusing vectors; --reembed (= --force): drop and re-embed; --optimize compacts + backfills title vectors (memory_headers) in bounded batches
   memory index --build [<slot>] [--dry-run] [--force]       # build a complete new-format index beside the current one (vectors reused; never activates)
             # the slot name defaults to 'next' (or 'main' when the store has no index at all)
   memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep] [--no-cutoff]
