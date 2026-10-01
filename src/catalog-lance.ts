@@ -29,6 +29,13 @@ export class LanceCatalog implements Catalog {
     private readonly autoRefresh: boolean,
   ) {}
 
+  /**
+   * Low-level: opens `dir` and, with `autoRefresh`, builds its catalog tables
+   * from disk when they are missing or stale. Callers must have established
+   * that the slot is a real one — production code reaches this ONLY through
+   * `openCatalog`, which refuses a slot with no meta.json so that a read can
+   * never bring an unbuilt slot into existence.
+   */
   static async open(opts: { slot: string; dir: string; root?: string; stores?: Store[]; mode?: LexicalMode; autoRefresh?: boolean }): Promise<LanceCatalog> {
     const db = await lancedb.connect(opts.dir);
     const { entries } = await openCatalogTables(db);

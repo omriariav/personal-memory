@@ -140,6 +140,19 @@ async function readEntryCache(): Promise<EntryCache> {
   return { version: ENTRY_CACHE_VERSION, files: {} };
 }
 
+/**
+ * Whether any store holds at least one entry file. A directory listing only —
+ * nothing is parsed and no cache is written — so a read path can tell "this
+ * store is empty" apart from "this store has entries but no index yet".
+ */
+export async function hasAnyEntryFile(): Promise<boolean> {
+  for (const store of listGraphStores()) {
+    if ((await listMarkdown(store.entriesDir)).length > 0) return true;
+    if ((await listMarkdown(store.summariesDir)).length > 0) return true;
+  }
+  return false;
+}
+
 /** Load every materialization across all registered stores, via the parse cache. */
 export async function loadEntryFiles(): Promise<FileEntry[]> {
   const files: string[] = [];

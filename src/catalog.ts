@@ -1,9 +1,11 @@
-import { loadAllEntries, hashEntry } from "./ingest.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { hasAnyEntryFile, loadAllEntries, hashEntry } from "./ingest.js";
 import { ensureLexical, bm25Scores, type LexicalIndex } from "./lexical.js";
 import { applyFilters, type Filterable, type SearchFilters } from "./ranking.js";
 import type { ChainSource } from "./chains.js";
 import type { MemoryEntry } from "./schema.js";
-import { resolveIndexSlotDetailed } from "./index-slots.js";
+import { META_FILENAME, resolveIndexSlotDetailed } from "./index-slots.js";
 
 /**
  * The one read seam over an index slot. `LegacyCatalog` wraps today's
@@ -41,7 +43,7 @@ export interface LexicalHit {
 }
 
 export interface Catalog {
-  readonly kind: "legacy" | "lance";
+  readonly kind: "legacy" | "lance" | "empty";
   readonly slot: string;
   readonly dir: string;
   readonly format: 1 | 2;
@@ -210,10 +212,76 @@ export class LegacyCatalog implements Catalog {
   }
 }
 
-/** Open the catalog of the resolved slot (`--index-slot` → env → active.json → legacy root). */
+/** The one wording for "this slot holds no index yet" — thrown here, printed by the CLI unchanged. */
+export function missingIndexMessage(slot: string): string {
+  return `no index built for slot "${slot}" — run \`npx tsx src/cli.ts index\``;
+}
+
+/**
+ * A store with no entries and no index: every read is legitimately empty.
+ * Answers from nothing and touches no file, so asking an empty store a
+ * question never creates the slot it would eventually be indexed into.
+ */
+export class EmptyCatalog implements Catalog {
+  readonly kind = "empty" as const;
+  readonly format = 2 as const;
+
+  constructor(
+    readonly slot: string,
+    readonly dir: string,
+  ) {}
+
+  async filter(_f: SearchFilters): Promise<CatalogEntryMeta[]> {
+    return [];
+  }
+  async byIds(_ids: string[]): Promise<CatalogEntryMeta[]> {
+    return [];
+  }
+  async linked(): Promise<ChainSource[]> {
+    return [];
+  }
+  async referrers(_id: string): Promise<CatalogEntryMeta[]> {
+    return [];
+  }
+  async bySourceIds(_ids: string[]): Promise<CatalogEntryMeta[]> {
+    return [];
+  }
+  async count(): Promise<number> {
+    return 0;
+  }
+  async all(): Promise<CatalogEntryMeta[]> {
+    return [];
+  }
+  async hydrate(metas: CatalogEntryMeta[]): Promise<MemoryEntry[]> {
+    if (metas.length > 0) throw new Error(`catalog: no entry with id '${metas[0]!.id}'`);
+    return [];
+  }
+  async lexical(_query: string, _allowed: Set<string>, _limit: number, _filters?: SearchFilters): Promise<LexicalHit[]> {
+    return [];
+  }
+  async refresh(): Promise<{ refreshed: boolean }> {
+    return { refreshed: false };
+  }
+}
+
+/**
+ * Open the catalog of the resolved slot (`--index-slot` → env → active.json →
+ * legacy root → the fresh new-format slot).
+ *
+ * A READ NEVER BUILDS A SLOT. `syncIndex` (the write path) is the only thing
+ * that creates one, so a new-format slot with no meta.json is refused here
+ * with the command that builds it — rather than silently materialized and
+ * then answered from, which would return lexical-only hits with no vectors
+ * and no warning. The exception is a store with no entries at all: there is
+ * nothing to index, so the empty answer is the correct one.
+ */
 export async function openCatalog(opts: { slot?: string } = {}): Promise<Catalog> {
   const r = resolveIndexSlotDetailed(opts.slot ? { override: opts.slot } : {});
   if (r.format === 1) return new LegacyCatalog(r.slot, r.dir);
+  if (!existsSync(join(r.dir, META_FILENAME))) {
+    if (await hasAnyEntryFile()) throw new Error(missingIndexMessage(r.slot));
+    return new EmptyCatalog(r.slot, r.dir);
+  }
   const { LanceCatalog } = await import("./catalog-lance.js");
   return LanceCatalog.open({ slot: r.slot, dir: r.dir });
 }
