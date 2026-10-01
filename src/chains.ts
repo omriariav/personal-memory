@@ -8,6 +8,9 @@ import type { MemoryEntry, MemoryType } from "./schema.js";
  */
 export type ChainRelation = "supersedes" | "extends";
 
+/** The slice of an entry the chain index needs — catalogs supply this without bodies. */
+export type ChainSource = Pick<MemoryEntry, "id" | "type" | "date" | "updated" | "follows">;
+
 export interface ChainAnnotation {
   /** Valid `follows` targets of this entry (dangling ids filtered out). */
   prev: string[];
@@ -58,7 +61,7 @@ export function relationOf(predecessor: MemoryType, follower: MemoryType): Chain
 }
 
 /** The date an entry last "spoke": `updated` when newer than `date`. */
-function refDate(e: MemoryEntry): string {
+function refDate(e: Pick<MemoryEntry, "date" | "updated">): string {
   return e.updated && e.updated > e.date ? e.updated : e.date;
 }
 
@@ -143,8 +146,8 @@ export function validateFollowsTargets(
  * linked-to, or carrying dangling links) get an annotation; everything else is
  * absent. O(component) per entry — trivial at this corpus size.
  */
-export function buildChainIndex(entries: MemoryEntry[]): Map<string, ChainAnnotation> {
-  const byId = new Map(entries.map((e) => [e.id, e] as const));
+export function buildChainIndex(entries: ChainSource[]): Map<string, ChainAnnotation> {
+  const byId: Map<string, ChainSource> = new Map(entries.map((e) => [e.id, e] as const));
   const prev = new Map<string, string[]>();
   const next = new Map<string, string[]>();
   const dangling = new Map<string, string[]>();

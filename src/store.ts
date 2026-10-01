@@ -1,9 +1,10 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import type { OptimizeStats } from "@lancedb/lancedb";
 import { getEmbedder, type Embedder } from "./embed.js";
-import { chunkEntry, displayChunkText, entrySearchText, hashEntry, headerText, loadAllEntries, INDEX_DIR } from "./ingest.js";
+import { chunkEntry, displayChunkText, entrySearchText, hashEntry, headerText, loadAllEntries } from "./ingest.js";
+import { META_FILENAME, readIndexMetaSync, resolveIndexSlotDetailed, type IndexMeta, type SlotResolution } from "./index-slots.js";
 import { packSlugs, type GraphId, type MemoryEntry, type MemoryRecord } from "./schema.js";
 import { ensureLexical, syncLexical, bm25Scores, tokenize } from "./lexical.js";
 import { buildChainIndex, type ChainAnnotation } from "./chains.js";
@@ -57,7 +58,6 @@ function entityMatchesFor(slugs: string[], filtered: MemoryEntry[], maxDf: numbe
 // importers (cli, server, recall, membership) keep working unchanged.
 export { applyFilters, type QueryOrigin, type QuerySpec, type SearchCompleteness, type SearchFilters };
 
-const META_PATH = join(INDEX_DIR, "meta.json");
 const TABLE = "memory";
 /**
  * One row per entry: the embedding of title + metadata alone (the header
@@ -132,23 +132,23 @@ async function upsertHeaders(db: lancedb.Connection, records: HeaderRecord[]): P
  */
 const INDEX_VERSION = 6;
 
-interface IndexMeta {
-  embedderId: string;
-  dim: number;
-  indexVersion?: number;
+function currentSlot(): SlotResolution {
+  return resolveIndexSlotDetailed();
 }
-
-async function readMeta(): Promise<IndexMeta | null> {
-  try {
-    return JSON.parse(await readFile(META_PATH, "utf8")) as IndexMeta;
-  } catch {
-    return null;
-  }
+/** The index directory of the slot this call targets — resolved lazily, never captured at load. */
+function indexDir(): string {
+  return currentSlot().dir;
 }
-
-async function writeMeta(meta: IndexMeta): Promise<void> {
-  await mkdir(INDEX_DIR, { recursive: true });
-  await writeFile(META_PATH, JSON.stringify(meta, null, 2), "utf8");
+function metaPath(dir: string): string {
+  return join(dir, META_FILENAME);
+}
+async function readMeta(dir: string): Promise<IndexMeta | null> {
+  return readIndexMetaSync(dir);
+}
+/** Legacy root meta: shape frozen forever (`{embedderId, dim, indexVersion}`). */
+async function writeLegacyMeta(dir: string, meta: { embedderId: string; dim: number; indexVersion: number }): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 }
 
 async function openTable(db: lancedb.Connection) {
@@ -199,10 +199,11 @@ export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
 }> {
   const embedder = getEmbedder();
   const entries = await loadAllEntries();
-  await mkdir(INDEX_DIR, { recursive: true });
-  const db = await lancedb.connect(INDEX_DIR);
+  const dir = indexDir();
+  await mkdir(dir, { recursive: true });
+  const db = await lancedb.connect(dir);
 
-  const meta = await readMeta();
+  const meta = await readMeta(dir);
   const embedderChanged = !meta || meta.embedderId !== embedder.id || meta.dim !== embedder.dim;
   const versionChanged = meta?.indexVersion !== INDEX_VERSION;
   const force = opts.force || embedderChanged || versionChanged;
@@ -261,7 +262,7 @@ export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
   if (headers && removedIds.length > 0) await headers.delete(`id IN (${sqlList(removedIds)})`);
   if (changed.length > 0 && headerLegEnabled()) await upsertHeaders(db, await headerRecordsFor(changed, embedder));
 
-  await writeMeta({ embedderId: embedder.id, dim: embedder.dim, indexVersion: INDEX_VERSION });
+  await writeLegacyMeta(dir, { embedderId: embedder.id, dim: embedder.dim, indexVersion: INDEX_VERSION });
   await syncLexical(entries);
   return { added: changed.length, removed: removedIds.length, unchanged };
 }
@@ -274,6 +275,8 @@ export interface IndexStatus {
   staleEntries: number;
   missingEntries: number;
   chunkRows: number;
+  slot: string;
+  format: 1 | 2;
 }
 
 export interface HeaderStatus {
@@ -300,7 +303,7 @@ export async function headerStatus(): Promise<HeaderStatus> {
   const entries = await loadAllEntries();
   let missing = entries.length;
   try {
-    const db = await lancedb.connect(INDEX_DIR);
+    const db = await lancedb.connect(indexDir());
     missing = (await headerGaps(db, entries)).length;
   } catch {
     // no index yet
@@ -317,8 +320,9 @@ export async function backfillHeaders(opts: { batch?: number } = {}): Promise<{ 
   if (!headerLegEnabled()) return { embedded: 0, remaining: 0 };
   const batch = opts.batch ?? HEADER_BACKFILL_BATCH;
   const entries = await loadAllEntries();
-  await mkdir(INDEX_DIR, { recursive: true });
-  const db = await lancedb.connect(INDEX_DIR);
+  const dir = indexDir();
+  await mkdir(dir, { recursive: true });
+  const db = await lancedb.connect(dir);
   const gaps = await headerGaps(db, entries);
   const todo = gaps.slice(0, batch);
   if (todo.length > 0) await upsertHeaders(db, await headerRecordsFor(todo, getEmbedder()));
@@ -327,7 +331,7 @@ export async function backfillHeaders(opts: { batch?: number } = {}): Promise<{ 
 
 /** Test seam: forget every header row (simulates an index built before the header leg existed). */
 export async function dropHeadersForTest(): Promise<void> {
-  const db = await lancedb.connect(INDEX_DIR);
+  const db = await lancedb.connect(indexDir());
   if ((await db.tableNames()).includes(HEADERS_TABLE)) await db.dropTable(HEADERS_TABLE);
 }
 
@@ -343,8 +347,9 @@ export async function optimizeIndex(
   cleanupOlderThanDays = 7,
   opts: { headerBatch?: number } = {},
 ): Promise<OptimizeIndexResult> {
-  await mkdir(INDEX_DIR, { recursive: true });
-  const db = await lancedb.connect(INDEX_DIR);
+  const dir = indexDir();
+  await mkdir(dir, { recursive: true });
+  const db = await lancedb.connect(dir);
   const table = await openTable(db);
   const cleanupOlderThan = new Date(Date.now() - cleanupOlderThanDays * 24 * 60 * 60 * 1000);
   if (!table) {
@@ -363,7 +368,9 @@ export async function optimizeIndex(
  */
 export async function indexStatus(): Promise<IndexStatus> {
   const entries = await loadAllEntries();
-  const meta = await readMeta();
+  const slot = currentSlot();
+  const dir = slot.dir;
+  const meta = await readMeta(dir);
   const base: IndexStatus = {
     embedderId: meta?.embedderId ?? null,
     dim: meta?.dim ?? null,
@@ -372,11 +379,13 @@ export async function indexStatus(): Promise<IndexStatus> {
     staleEntries: 0,
     missingEntries: entries.length,
     chunkRows: 0,
+    slot: slot.slot,
+    format: slot.format,
   };
 
   let table: lancedb.Table | null = null;
   try {
-    const db = await lancedb.connect(INDEX_DIR);
+    const db = await lancedb.connect(dir);
     table = await openTable(db);
   } catch {
     return base;
@@ -612,7 +621,7 @@ export async function searchDetailed(
   const filteredIds = new Set(filtered.map((e) => e.id));
   const exhaustive = shouldExhaustivelyAppend(filters, filtered.length, completeness, completeLimit);
 
-  const db = await lancedb.connect(INDEX_DIR);
+  const db = await lancedb.connect(indexDir());
   const table = await openTable(db);
 
   const chunkRows = table ? await table.countRows() : 0;
@@ -804,7 +813,7 @@ export async function findSimilar(
   opts: { limit?: number; minSim?: number; graph?: GraphId } = {},
 ): Promise<SimilarHit[]> {
   const { limit = 5, minSim = 0.92 } = opts;
-  const db = await lancedb.connect(INDEX_DIR);
+  const db = await lancedb.connect(indexDir());
   const table = await openTable(db);
   if (!table) return [];
 
