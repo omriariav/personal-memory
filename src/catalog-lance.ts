@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import matter from "gray-matter";
 import * as lancedb from "@lancedb/lancedb";
-import { lexicalMode, type Catalog, type CatalogEntryMeta, type LexicalHit, type LexicalMode } from "./catalog.js";
+import { byChainId, lexicalMode, type Catalog, type CatalogEntryMeta, type LexicalHit, type LexicalMode } from "./catalog.js";
 import { META_COLUMNS, likeLiteral, metaFromRow, openCatalogTables, readManifest, scanDirMtimes, sqlList, syncCatalogFromDisk } from "./catalog-sync.js";
 import { ROOT } from "./ingest.js";
 import { listGraphStores, type Store } from "./graphs.js";
@@ -82,13 +82,15 @@ export class LanceCatalog implements Catalog {
     const targets = [...new Set(linkers.flatMap((m) => m.follows ?? []))];
     const byId = new Map(linkers.map((m) => [m.id, m]));
     for (const t of await this.byIds(targets)) byId.set(t.id, t);
-    return [...byId.values()].map(({ id, type, date, updated, follows }) => ({
-      id,
-      type,
-      date,
-      ...(updated ? { updated } : {}),
-      ...(follows ? { follows } : {}),
-    }));
+    return [...byId.values()]
+      .map(({ id, type, date, updated, follows }) => ({
+        id,
+        type,
+        date,
+        ...(updated ? { updated } : {}),
+        ...(follows ? { follows } : {}),
+      }))
+      .sort(byChainId);
   }
 
   async referrers(id: string): Promise<CatalogEntryMeta[]> {

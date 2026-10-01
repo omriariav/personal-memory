@@ -106,14 +106,35 @@ test("shadow mode: LanceCatalog == LegacyCatalog on a 300-entry synthetic corpus
     const people = [...new Set(entries.flatMap((e) => e.people))];
     const tags = [...new Set(entries.flatMap((e) => e.tags))];
     const types = [...new Set(entries.map((e) => e.type))];
+    // `team` and `graph` are packed-slug columns like `people`/`tags`, and
+    // their own `whereClause` branch; a sweep that never draws them leaves
+    // two of the six filter kinds unshadowed. "no-such-*" covers the empty set.
+    const teams = [...new Set(entries.flatMap((e) => e.teams)), "no-such-team"];
+    const graphs = [...new Set(entries.flatMap((e) => e.graphs)), "no-such-graph"];
+    let teamDraws = 0;
+    let graphDraws = 0;
     for (let i = 0; i < 150; i++) {
       const f: SearchFilters = {};
       if (rand() < 0.5) f.person = pick(people);
       if (rand() < 0.4) f.tag = pick(tags);
       if (rand() < 0.3) f.type = pick(types);
+      if (rand() < 0.4) {
+        f.team = pick(teams);
+        teamDraws++;
+      }
+      if (rand() < 0.3) {
+        f.graph = pick(graphs);
+        graphDraws++;
+      }
       if (rand() < 0.4) f.since = pick(["2024-01-01", "2025-06-01"]);
       if (rand() < 0.3) f.until = pick(["2025-01-01", "2026-03-01"]);
       assert.deepEqual(ids(await lance.filter(f)), ids(await legacy.filter(f)), `filter ${JSON.stringify(f)}`);
+    }
+    assert.ok(teamDraws > 10, `the sweep must exercise team filters (drew ${teamDraws})`);
+    assert.ok(graphDraws > 10, `the sweep must exercise graph filters (drew ${graphDraws})`);
+    assert.ok(teams.length > 1, "the corpus has at least one real team to filter on");
+    for (const f of [{ team: teams[0]! }, { graph: graphs[0]! }]) {
+      assert.ok((await lance.filter(f)).length > 0, `a real ${JSON.stringify(f)} must match something, or the draws prove nothing`);
     }
 
     // metas are field-identical, in REQUEST order (the documented byIds contract)
@@ -131,7 +152,15 @@ test("shadow mode: LanceCatalog == LegacyCatalog on a 300-entry synthetic corpus
     const linkedL = await lance.linked();
     const linkedG = await legacy.linked();
     assert.ok(linkedG.length > 0, "corpus has follows chains");
-    assert.deepEqual(linkedL.sort((a, b) => a.id.localeCompare(b.id)), linkedG.sort((a, b) => a.id.localeCompare(b.id)));
+    // Compared IN ORDER, not as sets: the chain index keeps the order it is
+    // seeded in, so a per-slot ordering difference shows up as differently
+    // ordered `↳ extended by` lists in recall output.
+    assert.deepEqual(linkedL, linkedG, "linked() agrees element by element, in the same order");
+    assert.deepEqual(
+      linkedG.map((e) => e.id),
+      [...linkedG.map((e) => e.id)].sort(),
+      "and that order is by id, so it does not depend on file or table order",
+    );
     const target = linkedG.find((e) => e.follows?.length)!.follows![0]!;
     assert.deepEqual(ids(await lance.referrers(target)), ids(await legacy.referrers(target)));
 

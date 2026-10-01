@@ -157,8 +157,9 @@ test("index --build: a corpus larger than one write batch lands every row, still
       headerLeg,
     ) as { r: Record<string, number>; embeddedTexts: number; rows: Record<string, number> };
 
+    const chunks = out.r.chunks!;
     assert.equal(out.r.entries, n, "every entry is in the build");
-    assert.ok(out.r.chunks > BUILD_BATCH_ENTRIES, `the build must span more than one batch (chunks=${out.r.chunks})`);
+    assert.ok(chunks > BUILD_BATCH_ENTRIES, `the build must span more than one batch (chunks=${chunks})`);
     assert.equal(out.rows.memory, out.r.chunks, "the chunk table holds exactly the reported rows — no batch dropped");
     assert.equal(out.rows.memory_headers, out.r.headers, "the header table holds exactly the reported rows");
     assert.equal(out.r.headers, n, "one header row per entry across batches");

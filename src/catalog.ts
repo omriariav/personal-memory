@@ -96,6 +96,16 @@ export interface Catalog {
   refresh(): Promise<{ refreshed: boolean }>;
 }
 
+/**
+ * `linked()` is ordered by id in EVERY adapter. Its output seeds the chain
+ * index, whose fan-out lists (`↳ extended by`) keep the order they were built
+ * in — file order under `LegacyCatalog`, table order under `LanceCatalog` —
+ * so without one rule the same chain prints differently per slot.
+ */
+export function byChainId(a: { id: string }, b: { id: string }): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 export function metaOf(e: MemoryEntry): CatalogEntryMeta {
   return {
     id: e.id,
@@ -171,7 +181,8 @@ export class LegacyCatalog implements Catalog {
         date,
         ...(updated ? { updated } : {}),
         ...(follows ? { follows } : {}),
-      }));
+      }))
+      .sort(byChainId);
   }
 
   async referrers(id: string): Promise<CatalogEntryMeta[]> {
