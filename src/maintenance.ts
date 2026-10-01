@@ -1,7 +1,10 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { hasAnyEntryFile } from "./ingest.js";
 import { indexStatus } from "./store.js";
 import { lexicalStatus } from "./lexical.js";
-import { openCatalog, type CatalogEntryMeta } from "./catalog.js";
-import { resolveIndexSlotDetailed } from "./index-slots.js";
+import { missingIndexMessage, openCatalog, type CatalogEntryMeta } from "./catalog.js";
+import { META_FILENAME, resolveIndexSlotDetailed, type SlotResolution } from "./index-slots.js";
 import { NEXT_SLOT, formatSlotTable, slotStatus, type SlotStatusRow } from "./slot-build.js";
 import { analyzeGraphHygiene, readSlugDismissals, readSlugProposals, slugDismissalKeys, writeGraphMaintenanceAudit } from "./graph-maintenance.js";
 import { buildChainIndex } from "./chains.js";
@@ -66,28 +69,18 @@ function digestDebt(entries: CatalogEntryMeta[], threshold: number): Scope[] {
     .sort((a, b) => b.uncovered - a.uncovered);
 }
 
-export async function runMaintenance(threshold: number): Promise<void> {
-  const catalog = await openCatalog();
-  const entries = await catalog.all();
-
-  console.log("## Digest debt");
-  const debt = digestDebt(entries, threshold);
-  if (debt.length === 0) {
-    console.log(`(no scope has ≥${threshold} unsummarized entries)`);
-  } else {
-    for (const s of debt) {
-      const flag = s.kind === "person" ? "--person" : s.kind === "tag" ? "--tag" : "--quarter";
-      console.log(
-        `npx tsx src/cli.ts digest ${flag} ${s.key}   # ${s.uncovered} unsummarized entries`,
-      );
-    }
-  }
-
-  console.log("\n## Index health");
+/**
+ * `## Index health`. `missing` is the "this slot holds no index" message,
+ * printed under the counts when there is nothing to read from — the state in
+ * which this section is the whole point of the command.
+ */
+async function printIndexHealth(resolution: SlotResolution, missing: string | null): Promise<void> {
+  console.log("## Index health");
   const idx = await indexStatus();
   console.log(
     `entries ${idx.totalEntries} · indexed ${idx.indexedEntries} · stale ${idx.staleEntries} · missing ${idx.missingEntries} · chunks ${idx.chunkRows} (${idx.embedderId ?? "no index"})`,
   );
+  if (missing) console.log(missing);
   // `lexical.json` is the format-1 lexical leg. A new-format slot indexes its
   // text with FTS inside the catalog, so reporting the root file as "missing"
   // there would be a permanent false alarm.
@@ -109,10 +102,11 @@ export async function runMaintenance(threshold: number): Promise<void> {
   console.log(formatSlotTable(rows));
   const hint = slotHint(rows, idx.totalEntries);
   if (hint) console.log(hint);
-  const resolution = resolveIndexSlotDetailed();
   if (resolution.warning) console.log(`⚠ ${resolution.warning}`);
+}
 
-  console.log("\n## Connectors");
+async function printConnectors(): Promise<void> {
+  console.log("## Connectors");
   const { loadConnectors } = await import("./connectors.js");
   const connectors = await loadConnectors();
   const broken = connectors.filter((c) => c.error);
@@ -124,6 +118,52 @@ export async function runMaintenance(threshold: number): Promise<void> {
     for (const c of broken) console.log(`✗ ${c.name}: ${c.error!.split("\n")[0]}`);
     console.log("→ fix: npx tsx src/cli.ts connectors");
   }
+}
+
+/**
+ * A store that has Markdown but whose resolved slot holds no index. Every
+ * other read refuses here, and rightly so — but `maintenance` is the command
+ * you run to find out what is wrong, so it must answer. It reports the index
+ * health it CAN see (counts, slots, the missing-index message) and says in
+ * one line that the catalog-backed sections were skipped, rather than
+ * reporting them as empty. A read never builds a slot, so there is nothing
+ * else it could truthfully do.
+ */
+function indexIsMissing(resolution: SlotResolution): boolean {
+  return resolution.format === 2 && !existsSync(join(resolution.dir, META_FILENAME));
+}
+
+export async function runMaintenance(threshold: number): Promise<void> {
+  const resolution = resolveIndexSlotDetailed();
+  if (indexIsMissing(resolution) && (await hasAnyEntryFile())) {
+    await printIndexHealth(resolution, missingIndexMessage(resolution.slot));
+    console.log("");
+    await printConnectors();
+    console.log("\n## Digest debt · Dangling links · Slug hygiene");
+    console.log("skipped: no index built — run: npx tsx src/cli.ts index");
+    return;
+  }
+
+  const catalog = await openCatalog();
+  const entries = await catalog.all();
+
+  console.log("## Digest debt");
+  const debt = digestDebt(entries, threshold);
+  if (debt.length === 0) {
+    console.log(`(no scope has ≥${threshold} unsummarized entries)`);
+  } else {
+    for (const s of debt) {
+      const flag = s.kind === "person" ? "--person" : s.kind === "tag" ? "--tag" : "--quarter";
+      console.log(
+        `npx tsx src/cli.ts digest ${flag} ${s.key}   # ${s.uncovered} unsummarized entries`,
+      );
+    }
+  }
+
+  console.log("");
+  await printIndexHealth(resolution, null);
+  console.log("");
+  await printConnectors();
 
   console.log("\n## Dangling links");
   const chainIndex = buildChainIndex(await catalog.linked());

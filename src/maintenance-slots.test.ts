@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { slotHint } from "./maintenance.js";
@@ -150,6 +150,55 @@ test("optimizeIndex: a broken non-active slot is reported, never fatal to the ot
     assert.ok(opt.slots[1]!.error, "the broken slot carries its failure");
     assert.equal(opt.slots[2]!.error, undefined, "the healthy slot after it was optimized anyway");
     assert.equal(opt.slots[2]!.fts?.unindexed, 0, "and its FTS index is folded");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("optimizeIndex: a non-active slot with an unreadable meta.json is still reported with its format", { timeout: 300_000 }, () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-maint-badmeta-")));
+  try {
+    seedStore(root);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`, { MEMORY_INDEX_SLOT: "legacy" });
+    runInStore(root, `const b = await import(${BUILD_MOD}); console.log(JSON.stringify(await b.buildSlot({ name: "next" })));`);
+    // Both halves broken: unparseable meta.json AND rubble where the catalog
+    // should be. The error row must still carry the slot's format, which is
+    // why the reporting path may not re-read anything about the slot.
+    const rubble = join(root, ".index", "slots", "rubble");
+    mkdirSync(join(rubble, "entries.lance"), { recursive: true });
+    writeFileSync(join(rubble, "meta.json"), "{ not json", "utf8");
+    const opt = runInStore(
+      root,
+      `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.optimizeIndex(7)));`,
+    ) as { slots: { slot: string; format: number; error?: string; fts: { unindexed: number } | null }[] };
+
+    assert.deepEqual(opt.slots.map((s) => s.slot), ["legacy", "next", "rubble"], "every built slot is still reported");
+    assert.ok(opt.slots[2]!.error, "the slot with the unreadable meta.json carries its failure");
+    assert.equal(opt.slots[2]!.format, 2, "and its format, resolved before the failure rather than after it");
+    assert.equal(opt.slots[1]!.error, undefined, "the healthy slot was optimized anyway");
+    assert.equal(opt.slots[1]!.fts?.unindexed, 0, "and its FTS index is folded");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("maintenance on a store with entries but no index reports instead of refusing", { timeout: 300_000 }, () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-maint-noindex-")));
+  try {
+    seedStore(root);
+    // No sync, no build: Markdown on disk and nothing under .index/ at all.
+    const out = cliIn(root, ["maintenance"]);
+    assert.match(out, /## Index health/, "the one section it can still report comes first");
+    assert.match(out, /entries 7 · indexed 0 .* \(no index\)/, "the counts it can see from the Markdown");
+    assert.match(out, /no index built for slot "main"/, "the health line says what is missing");
+    assert.match(out, /→ fix: npx tsx src\/cli\.ts index/, "and names the command that fixes it");
+    assert.match(out, /^slot\s+format\s+state\s+entries\s+chunks\s+last sync$/m, "the slot table is still printed");
+    assert.match(out, /^main\s+2\s+active\s+-\s+-\s+-$/m, "showing the resolved slot as unbuilt");
+    assert.match(out, /skipped: no index built — run: npx tsx src\/cli\.ts index/, "and the catalog-backed sections are skipped, not reported empty");
+    assert.doesNotMatch(out, /no scope has ≥/, "digest debt is not reported as empty");
+    assert.doesNotMatch(out, /no suspiciously-similar slugs/, "slug hygiene is not reported as empty");
+    assert.ok(!existsSync(join(root, ".index", "slots", "main")), "a read never materialized the slot it resolved to");
+    assert.ok(!existsSync(join(root, ".index", "graph-maintenance.json")), "and never wrote the hygiene audit it could not compute");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

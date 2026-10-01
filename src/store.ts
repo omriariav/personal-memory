@@ -536,9 +536,14 @@ async function headerGaps(db: lancedb.Connection, entries: MemoryEntry[]): Promi
 export async function headerStatus(): Promise<HeaderStatus> {
   const entries = await loadAllEntries();
   let missing = entries.length;
+  const dir = indexDir();
   try {
-    const db = await lancedb.connect(indexDir());
-    missing = (await headerGaps(db, entries)).length;
+    // Same rule as `indexStatus`: connecting would create the slot directory,
+    // and a status read may not do that.
+    if (existsSync(dir)) {
+      const db = await lancedb.connect(dir);
+      missing = (await headerGaps(db, entries)).length;
+    }
   } catch {
     // no index yet
   }
@@ -628,10 +633,9 @@ export async function optimizeIndex(
   let stats: OptimizeStats | null = null;
   let headers = { embedded: 0, remaining: 0 };
 
-  const optimizeOne = async (slot: string): Promise<SlotOptimizeStats> => {
+  const optimizeOne = async (slot: string, format: 1 | 2): Promise<SlotOptimizeStats> => {
     const isActive = slot === active.slot;
     const dir = slotDir(slot);
-    const format = slotFormat(slot);
     await mkdir(dir, { recursive: true });
     const db = await lancedb.connect(dir);
     const table = await openTable(db);
@@ -663,12 +667,16 @@ export async function optimizeIndex(
 
   // The active slot is the one every read answers from, so its failure still
   // propagates; a slot beside it must never fail the weekly job.
-  const slots: SlotOptimizeStats[] = [await optimizeOne(active.slot)];
+  const slots: SlotOptimizeStats[] = [await optimizeOne(active.slot, slotFormat(active.slot))];
   for (const slot of names.slice(1)) {
+    // Resolved BEFORE the risky work and reused in the catch: a handler that
+    // re-derives anything from the slot it is reporting on can throw again,
+    // outside any try, and take the remaining slots with it.
+    const format = slotFormat(slot);
     try {
-      slots.push(await optimizeOne(slot));
+      slots.push(await optimizeOne(slot, format));
     } catch (err) {
-      slots.push({ slot, format: slotFormat(slot), fts: null, error: err instanceof Error ? err.message : String(err) });
+      slots.push({ slot, format, fts: null, error: err instanceof Error ? err.message : String(err) });
     }
   }
   return { tableExists, cleanupOlderThan: cleanupOlderThan.toISOString(), stats, headers, slots };
@@ -697,6 +705,10 @@ export async function indexStatus(): Promise<IndexStatus> {
 
   let table: lancedb.Table | null = null;
   try {
+    // `lancedb.connect` CREATES the directory it is handed. Reporting on a
+    // slot that was never built must not bring it into existence, so an
+    // absent directory answers from `base` without connecting at all.
+    if (!existsSync(dir)) return base;
     const db = await lancedb.connect(dir);
     table = await openTable(db);
   } catch {
