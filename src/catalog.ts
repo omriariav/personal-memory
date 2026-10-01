@@ -106,30 +106,40 @@ export function byChainId(a: { id: string }, b: { id: string }): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+/**
+ * `filter()` runs this over every entry the filters kept — the whole corpus
+ * when there are none — so it is one object literal plus conditional
+ * assignments rather than a chain of `...(x ? {x} : {})` spreads, each of
+ * which allocates an intermediate object. The optional fields are still
+ * ABSENT (not `undefined`) when the entry has none: the shadow test compares
+ * metas from the two adapters with deepStrictEqual.
+ */
 export function metaOf(e: MemoryEntry): CatalogEntryMeta {
-  return {
+  const m: CatalogEntryMeta = {
     id: e.id,
     date: e.date,
-    ...(e.updated ? { updated: e.updated } : {}),
     type: e.type,
     title: e.title,
     people: e.people,
     teams: e.teams,
     tags: e.tags,
     graphs: e.graphs,
-    ...(e.sources ? { sources: e.sources } : {}),
-    ...(e.follows ? { follows: e.follows } : {}),
-    ...(e.source_ids ? { source_ids: e.source_ids } : {}),
     hash: hashEntry(e),
     path: e.path,
     paths: e.paths,
   };
+  if (e.updated) m.updated = e.updated;
+  if (e.sources) m.sources = e.sources;
+  if (e.follows) m.follows = e.follows;
+  if (e.source_ids) m.source_ids = e.source_ids;
+  return m;
 }
 
 export class LegacyCatalog implements Catalog {
   readonly kind = "legacy" as const;
   readonly format = 1 as const;
   private cache: Promise<MemoryEntry[]> | null = null;
+  private index: Promise<Map<string, MemoryEntry>> | null = null;
   private postings: Promise<LexicalIndex> | null = null;
 
   constructor(
@@ -143,8 +153,14 @@ export class LegacyCatalog implements Catalog {
     return this.cache;
   }
 
-  private async byId(): Promise<Map<string, MemoryEntry>> {
-    return new Map((await this.entries()).map((e) => [e.id, e]));
+  /**
+   * Memoized beside the entries cache: `byIds` and `hydrate` are both called
+   * on the way through one search, and rebuilding an id map over the whole
+   * corpus per call made the cost of a lookup scale with the store.
+   */
+  private byId(): Promise<Map<string, MemoryEntry>> {
+    if (!this.index) this.index = this.entries().then((entries) => new Map(entries.map((e) => [e.id, e])));
+    return this.index;
   }
 
   async filter(f: SearchFilters): Promise<CatalogEntryMeta[]> {
@@ -166,7 +182,7 @@ export class LegacyCatalog implements Catalog {
 
   async linked(): Promise<ChainSource[]> {
     const entries = await this.entries();
-    const byId = new Map(entries.map((e) => [e.id, e]));
+    const byId = await this.byId();
     const members = new Set<string>();
     for (const e of entries) {
       if (!e.follows?.length) continue;
@@ -215,9 +231,10 @@ export class LegacyCatalog implements Catalog {
   }
 
   /**
-   * `ensureLexical` re-reads and re-parses lexical.json on every call, so the
-   * index is memoized per catalog: one search asks for several phrasings and
-   * must pay that once, as it did before the seam existed.
+   * Memoized per catalog so one search's several phrasings share it; the
+   * parse itself is also cached across catalogs in `ensureLexical`, keyed by
+   * the file's (mtime, size). The index is READ-ONLY here — `bm25Scores`
+   * never writes to it.
    */
   private lexicalIndex(): Promise<LexicalIndex> {
     if (!this.postings) this.postings = (async () => ensureLexical(await this.entries(), this.opts.lexicalPath))();

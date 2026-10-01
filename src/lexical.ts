@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { INDEX_DIR, LEXICAL_TITLE_REPEAT, entrySearchText, hashEntry } from "./ingest.js";
 import type { MemoryEntry } from "./schema.js";
@@ -137,16 +137,49 @@ export async function syncLexical(entries: MemoryEntry[], path: string = LEXICAL
 }
 
 /**
+ * Parsed indexes by path, valid while the file still shows the (mtime, size)
+ * they were parsed at. `lexical.json` is megabytes at corpus scale and every
+ * search re-parsed it, which is the single largest avoidable cost on the
+ * legacy read path. Only `ensureLexical` reads through this: `syncLexical`
+ * MUTATES what `readLexical` hands it, so it keeps parsing its own copy.
+ */
+const parsedLexical = new Map<string, { mtimeMs: number; size: number; idx: LexicalIndex }>();
+
+/** The file's (mtime, size), or null when it is not there. */
+async function lexicalStamp(path: string): Promise<{ mtimeMs: number; size: number } | null> {
+  try {
+    const st = await stat(path);
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The read-path guarantee: a missing, corrupt or older-version index file is
  * rebuilt from the current entries and persisted right here, so an upgrade
  * never leaves `maintenance` reporting a missing lexical index until the
  * next write, and search never rebuilds BM25 in memory per query.
+ *
+ * The result is READ-ONLY to callers — it is shared with every other reader
+ * of the same unchanged file.
  */
 export async function ensureLexical(entries: MemoryEntry[], path: string = LEXICAL_PATH): Promise<LexicalIndex> {
+  const stamp = await lexicalStamp(path);
+  if (stamp) {
+    const hit = parsedLexical.get(path);
+    if (hit && hit.mtimeMs === stamp.mtimeMs && hit.size === stamp.size) return hit.idx;
+  }
   const existing = await readLexical(path);
-  if (existing) return existing;
+  if (existing) {
+    if (stamp) parsedLexical.set(path, { ...stamp, idx: existing });
+    return existing;
+  }
   await syncLexical(entries, path);
-  return (await readLexical(path)) ?? buildLexical(entries);
+  const rebuilt = (await readLexical(path)) ?? buildLexical(entries);
+  const after = await lexicalStamp(path);
+  if (after) parsedLexical.set(path, { ...after, idx: rebuilt });
+  return rebuilt;
 }
 
 /**
