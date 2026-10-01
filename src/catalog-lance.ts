@@ -82,11 +82,9 @@ export class LanceCatalog implements Catalog {
     const targets = [...new Set(linkers.flatMap((m) => m.follows ?? []))];
     const byId = new Map(linkers.map((m) => [m.id, m]));
     for (const t of await this.byIds(targets)) byId.set(t.id, t);
-    // `CatalogEntryMeta.type` widens to string (Filterable); the column only ever
-    // holds a MemoryType, written from a zod-validated entry by `entryRowFor`.
     return [...byId.values()].map(({ id, type, date, updated, follows }) => ({
       id,
-      type: type as MemoryEntry["type"],
+      type,
       date,
       ...(updated ? { updated } : {}),
       ...(follows ? { follows } : {}),

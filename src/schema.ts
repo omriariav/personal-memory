@@ -22,6 +22,9 @@ export const MEMORY_TYPES = [
 
 export type MemoryType = (typeof MEMORY_TYPES)[number];
 
+/** The type enum on its own, so derived stores can validate a `type` column. */
+export const MemoryTypeSchema = z.enum(MEMORY_TYPES);
+
 const isoDate = z.preprocess(
   // YAML auto-parses unquoted dates into JS Date objects; normalize to ISO string.
   (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : v),
@@ -36,7 +39,7 @@ export const FrontmatterSchema = z
   .object({
     id: slug.describe("stable, date-prefixed slug, e.g. 2026-06-28-acme-kickoff"),
     date: isoDate,
-    type: z.enum(MEMORY_TYPES),
+    type: MemoryTypeSchema,
     title: z.string().min(1),
     people: z.array(slug).default([]),
     teams: z.array(slug).default([]),

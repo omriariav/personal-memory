@@ -156,11 +156,7 @@ export async function applyRules(
     plan: { actions: [], conflicts: [] },
   };
   if (rules.length === 0) return report;
-  // The catalog types `type` as plain `string` (format-agnostic); every stored
-  // value is a validated MemoryType, so this narrowing is safe.
-  let entries: Pick<MemoryEntry, "id" | "tags" | "type" | "graphs">[] = (await (
-    await openCatalog()
-  ).all()) as unknown as Pick<MemoryEntry, "id" | "tags" | "type" | "graphs">[];
+  let entries: Pick<MemoryEntry, "id" | "tags" | "type" | "graphs">[] = await (await openCatalog()).all();
   if (opts.ids) entries = entries.filter((e) => opts.ids!.includes(e.id));
   report.plan = planRules(entries, rules);
   report.skippedConflicts = report.plan.conflicts.length;

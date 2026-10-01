@@ -4,7 +4,7 @@ import { hasAnyEntryFile, loadAllEntries, hashEntry } from "./ingest.js";
 import { ensureLexical, bm25Scores, type LexicalIndex } from "./lexical.js";
 import { applyFilters, type Filterable, type SearchFilters } from "./ranking.js";
 import type { ChainSource } from "./chains.js";
-import type { MemoryEntry } from "./schema.js";
+import type { MemoryEntry, MemoryType } from "./schema.js";
 import { META_FILENAME, resolveIndexSlotDetailed } from "./index-slots.js";
 
 /**
@@ -36,6 +36,11 @@ export function lexicalMode(env: Record<string, string | undefined> = process.en
 
 /** Everything a read needs about an entry short of its body. */
 export interface CatalogEntryMeta extends Filterable {
+  /**
+   * Narrower than `Filterable.type`: every adapter validates the value, so
+   * callers that need a `MemoryType` (chain status, rule matching) never cast.
+   */
+  type: MemoryType;
   title: string;
   hash: string;
   /** Absolute home path. */

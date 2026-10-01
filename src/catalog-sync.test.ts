@@ -177,6 +177,20 @@ test("entryRowFor/metaFromRow round-trip to the same meta LegacyCatalog would em
   }
 });
 
+test("metaFromRow rejects a row whose type is outside the schema enum", () => {
+  const root = tempRoot("pm-catrow-bad-");
+  try {
+    const { lex: _lex, ...row } = entryRowFor(makeEntry(root, { id: "2026-01-01-plain" }), root);
+    assert.throws(
+      () => metaFromRow({ ...row, type: "nonsense" }, root),
+      /entry '2026-01-01-plain' has unknown type 'nonsense'/,
+      "a corrupt type column names the offending entry",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("manifest: round-trip, generation increments, N/avgdl read from the entries table", async () => {
   const root = tempRoot("pm-catman-");
   try {

@@ -5,7 +5,7 @@ import * as lancedb from "@lancedb/lancedb";
 import { CATALOG_VERSION, CatalogManifestSchema, MANIFEST_FILENAME, type CatalogManifest } from "./index-slots.js";
 import { chunkEntry, entrySearchText, groupEntries, hashEntry, parseEntry } from "./ingest.js";
 import { tokenize } from "./lexical.js";
-import { packList, packSlugs, unpackList, type CatalogEntryRow, type CatalogFileRow, type MemoryEntry } from "./schema.js";
+import { MemoryTypeSchema, packList, packSlugs, unpackList, type CatalogEntryRow, type CatalogFileRow, type MemoryEntry, type MemoryType } from "./schema.js";
 import type { Store } from "./graphs.js";
 import type { CatalogEntryMeta } from "./catalog.js";
 
@@ -60,6 +60,17 @@ export function entryRowFor(e: MemoryEntry, root: string): CatalogEntryRow {
 }
 
 /**
+ * The `type` column is written from a zod-validated entry, so a value outside
+ * the enum means the table was written by something else or is corrupt —
+ * louder as an error naming the row than as a silent cast.
+ */
+export function memoryTypeOf(type: string, id: string): MemoryType {
+  const parsed = MemoryTypeSchema.safeParse(type);
+  if (!parsed.success) throw new Error(`catalog: entry '${id}' has unknown type '${type}'`);
+  return parsed.data;
+}
+
+/**
  * Row → meta. Optional list fields are omitted when empty so a meta is
  * field-identical to `metaOf()` over the same entry (the shadow test compares
  * them with `deepEqual`).
@@ -74,7 +85,7 @@ export function metaFromRow(row: Omit<CatalogEntryRow, "lex">, root: string): Ca
     id: row.id,
     date: row.date,
     ...(row.updated ? { updated: row.updated } : {}),
-    type: row.type as MemoryEntry["type"],
+    type: memoryTypeOf(row.type, row.id),
     title: row.title,
     people: unpackList(row.people),
     teams: unpackList(row.teams),

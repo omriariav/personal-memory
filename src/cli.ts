@@ -140,11 +140,8 @@ function chainStatusLines(
 }
 
 /** ` [open]` / ` [resolved → id]` marker for pending-decision/todo listings. */
-// `type` is plain `string` on a catalog-sourced entry (format-agnostic);
-// every stored value is a validated MemoryType, so the narrowing cast below
-// is safe.
-function statusSuffix(e: { id: string; type: string }, chainIndex: Map<string, ChainAnnotation>): string {
-  const s = entryStatus({ id: e.id, type: e.type as MemoryEntry["type"] }, chainIndex);
+function statusSuffix(e: Pick<MemoryEntry, "id" | "type">, chainIndex: Map<string, ChainAnnotation>): string {
+  const s = entryStatus(e, chainIndex);
   if (!s) return "";
   return s.status === "resolved" ? `  [resolved → ${s.resolvedBy ?? "?"}]` : "  [open]";
 }
@@ -1020,7 +1017,7 @@ async function cmdRules(argv: string[]) {
         .filter(Boolean)
         .join(" + ");
       const n = entries.filter(
-        (e) => e.graphs.includes(DEFAULT_GRAPH) && matchRule({ tags: e.tags, type: e.type as MemoryEntry["type"] }, r),
+        (e) => e.graphs.includes(DEFAULT_GRAPH) && matchRule({ tags: e.tags, type: e.type }, r),
       ).length;
       console.log(`● ${match}  →  ${r.graph}  (${r.mode})   matches ${n} private entr${n === 1 ? "y" : "ies"}`);
     }
