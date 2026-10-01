@@ -82,7 +82,7 @@ four things a manual write skips:
 | `memory/people/<slug>.md` | ✅ people profiles (display name, nicknames; frontmatter only, private store) | `cli.ts people alias` (preferred — validates, checkpoints) or Edit tool |
 | `memory/eval/**` | ❌ never by hand | `cli.ts eval add-golden` / `eval remove-golden` / `eval run --save-baseline` only (validates ids, checkpoints `memory/.git`) |
 | `memory-graphs/*/GRAPH.md` | ✅ graph manifests | Edit tool or web UI |
-| `.index/**` | ❌ never | rebuildable derivative; `cli.ts index` regenerates |
+| `.index/**` | ❌ never | rebuildable derivative; `cli.ts index` regenerates; slots are managed only by `cli.ts index --build`/`--activate`/`--prune` |
 
 ## Enforcement
 

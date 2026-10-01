@@ -173,7 +173,9 @@ by default**, fused into one ranking; shared memberships are labeled
 `--person <slug>` · `--type <type>` · `--team <slug>` · `--tag <slug>` ·
 `--since <YYYY-MM-DD>` · `--until <YYYY-MM-DD>` · `--graph <name>` ·
 `-k <n>` · `--complete` · `--complete-if-small` · `--require-complete` ·
-`--no-expand` · `--format json`
+`--no-expand` · `--format json` · `--index-slot <name>` (A/B a built slot
+before `index --activate`; the JSON report's `index.slot` says which one
+answered)
 
 ## Keeping recall sharp (compaction)
 
