@@ -4,8 +4,9 @@ import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { loadAllEntries, ROOT } from "./ingest.js";
+import { ROOT } from "./ingest.js";
 import { search, indexStatus, type SearchFilters } from "./store.js";
+import { openCatalog } from "./catalog.js";
 import { loadConnectors, loadConnectorState, writeConnector, relConnector } from "./connectors.js";
 import {
   DEFAULT_GRAPH,
@@ -76,18 +77,40 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+/**
+ * Open the active slot's catalog for a read endpoint. A read never builds a
+ * slot (see catalog.ts), so an unbuilt format-2 slot throws — that is the
+ * one failure mode `openCatalog` documents, so any throw here is reported as
+ * a 503 with the CLI's own fix-it message rather than surfacing as a 500.
+ * Returns `undefined` (having already responded) when the catalog could not
+ * be opened.
+ */
+async function openCatalogOr503(res: ServerResponse): Promise<Awaited<ReturnType<typeof openCatalog>> | undefined> {
+  try {
+    return await openCatalog();
+  } catch (err) {
+    sendJson(res, 503, { error: err instanceof Error ? err.message : String(err) });
+    return undefined;
+  }
+}
+
 async function apiData(res: ServerResponse): Promise<void> {
-  const [index, entries] = await Promise.all([indexStatus(), loadAllEntries()]);
-  const chainIndex = buildChainIndex(entries);
-  const payload = entries
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .map((e) => {
-      const chain = chainIndex.get(e.id);
-      const paths = Object.fromEntries(
-        Object.entries(e.paths).map(([g, p]) => [g, relative(ROOT, p)]),
-      );
-      return { ...e, path: relative(ROOT, e.path), paths, ...(chain ? { chain } : {}) };
-    });
+  const catalog = await openCatalogOr503(res);
+  if (!catalog) return;
+  const [index, metas] = await Promise.all([indexStatus(), catalog.all()]);
+  // Deterministic across both slot formats: newest first, id tiebreak — the
+  // legacy slot's file-scan order and a Lance slot's table order otherwise
+  // disagree on same-date entries.
+  const sorted = [...metas].sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+  const chainIndex = buildChainIndex(await catalog.linked());
+  const entries = await catalog.hydrate(sorted);
+  const payload = entries.map((e) => {
+    const chain = chainIndex.get(e.id);
+    const paths = Object.fromEntries(
+      Object.entries(e.paths).map(([g, p]) => [g, relative(ROOT, p)]),
+    );
+    return { ...e, path: relative(ROOT, e.path), paths, ...(chain ? { chain } : {}) };
+  });
   sendJson(res, 200, { generatedAt: new Date().toISOString(), index, entries: payload });
 }
 
@@ -194,7 +217,8 @@ const GRAPH_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const RESERVED_GRAPH_ROUTES = new Set(["rules"]);
 
 async function apiGraphs(res: ServerResponse): Promise<void> {
-  const entries = await loadAllEntries();
+  const catalog = await openCatalogOr503(res);
+  if (!catalog) return;
   const graphs = [];
   for (const store of listGraphStores()) {
     const manifest = store.graph === DEFAULT_GRAPH ? null : await loadGraphManifest(store);
@@ -202,7 +226,7 @@ async function apiGraphs(res: ServerResponse): Promise<void> {
       slug: store.graph,
       name: manifest?.fm?.display_name ?? store.graph,
       description: manifest?.body?.split("\n")[0] ?? "",
-      entryCount: entries.filter((e) => e.graphs.includes(store.graph)).length,
+      entryCount: (await catalog.filter({ graph: store.graph })).length,
       dir: relative(ROOT, store.dir),
       builtin: store.graph === DEFAULT_GRAPH,
       ...(manifest?.error ? { error: manifest.error } : {}),
@@ -251,12 +275,13 @@ async function apiGraphManifest(res: ServerResponse, slug: string): Promise<void
     sendJson(res, 404, { error: `unknown graph '${slug}'` });
     return;
   }
-  const entries = await loadAllEntries();
+  const catalog = await openCatalogOr503(res);
+  if (!catalog) return;
   const manifest = await loadGraphManifest(store);
   sendJson(res, 200, {
     slug,
     path: relative(ROOT, store.manifestPath),
-    entryCount: entries.filter((e) => e.graphs.includes(slug)).length,
+    entryCount: (await catalog.filter({ graph: slug })).length,
     raw: manifest?.raw ?? "",
     body: manifest?.body,
     display_name: manifest?.fm?.display_name,
