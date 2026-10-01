@@ -177,8 +177,13 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   zero-service property. Revisit only if: (a) multi-writer/multi-machine access
   is needed; (b) above ~2k entries, build the new-format slot
   (`index --build next`): reads go through the catalog tables and its lexical
-  column, and bodies are read only for the hits. Hand edits of existing files
-  are picked up by writer syncs, `memory index`, or `MEMORY_SYNC=strict` —
+  column, and bodies are read only for the hits. That is the READ path only:
+  the write path still parses every entry through `entries-cache.json`, and the
+  `files` table has no reader yet, so `add` keeps paying the whole-store parse
+  at any size. A scoped writer sync (`syncIndex({scope: {paths}})` reading the
+  `files` table to decide what changed) is the planned follow-up. Hand edits of
+  existing files are picked up by writer syncs, `memory index`, or
+  `MEMORY_SYNC=strict` —
   directory mtimes alone do not see an in-place edit; or (c) retrieval
   *quality* degrades (fix: tune embedder/chunking/fusion first, not storage).
 - **Recall guarantees:** filtered `query` runs are exhaustive when the filter

@@ -386,6 +386,11 @@ npx tsx src/cli.ts index --activate previous     # roll back any time
 npx tsx src/cli.ts index --prune --confirm       # once satisfied: drop the non-active slots' derived artifacts
 ```
 
+The gain is on the READ path. Writers still parse every entry through the
+root parse cache, and the `files` table has no reader yet, so `add` costs the
+same on a new-format slot as on the legacy one; a scoped writer sync that
+reads that table to decide what changed is the planned follow-up.
+
 Writers (`add`, `copy`/`move`/`remove`/`link`, slug merges) keep every built
 slot in sync, so `next` never goes stale while you compare. Reads refuse a
 new-format slot that has no index yet rather than answering from nothing;

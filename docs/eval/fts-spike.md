@@ -128,3 +128,40 @@ supported — it is the faster leg and wins on MRR and nDCG@10 — until the k1
 gap is closed, either by configuring Lance's k1 to 1.5 (or ours to 1.2) and
 re-running `npm run eval:slot` to delta 0 up to tie order. Reproduce with
 `npm run eval:slot` and `MEMORY_LEXICAL=fts npm run eval:slot`.
+
+## 20k read-path measurement (2026-10-01)
+
+The 4k harness above is too small to show what the format-2 read path costs
+per process. One run each over the cached 20 088-entry corpus
+(`--size 20000`, seed 42), sequential, nothing else on the machine, compared
+against `docs/eval/baseline-20k.json` (recorded on the legacy slot at
+`3538b06`). The `next` slot was built from the corpus' legacy index and
+reused every vector — `entries 20088 · vectors reused 20088 · embedded 0`.
+
+| run | p50 | p95 | recall@10 | MRR | nDCG@10 |
+|---|---|---|---|---|---|
+| baseline-20k.json (recorded) | 477 ms | 531 ms | 0.9046 | 0.8058 | 0.8319 |
+| legacy slot | 467 ms | 522 ms | 0.9046 | 0.8058 | 0.8319 |
+| `--index-slot next`, `postings` | 549 ms | 618 ms | 0.9046 | 0.8058 | 0.8319 |
+| `--index-slot next`, `MEMORY_LEXICAL=fts` | 286 ms | 322 ms | 0.9046 | 0.8223 | 0.8436 |
+
+What it says, at five times the 4k corpus:
+
+- **Rank identity holds at scale.** The `postings` slot reproduces every
+  metric of the legacy slot exactly (all deltas 0, no case flips), which is
+  the property the default rests on.
+- **`postings` costs about 80 ms per query more than the legacy slot here**
+  (+17%), where at 4k it cost 7 ms (+7%). The reference scorer rebuilds its
+  BM25 index from the catalog's `lex` column once per process and then scores
+  every doc per phrasing, so its share grows with the corpus.
+- **FTS is the leg that scales**: 286 ms against the legacy slot's 467, and
+  ahead on MRR (+0.0164) and nDCG@10 (+0.0117) with recall@10 unchanged. It
+  still flips cases — `needle-00-fact` and `needle-00-vs-dup` fail where
+  `needle-03`/`needle-09` pass — so the harness still reports a regression
+  under the decision rule, for the same k1 = 1.2 reason as at 4k.
+
+No default moves on this measurement; it is recorded so the `MEMORY_LEXICAL`
+decision is taken with the scale numbers in hand rather than the 4k ones.
+Reproduce with `npx tsx scripts/eval-retrieval.ts --size 20000 [--index-slot
+next] --compare docs/eval/baseline-20k.json`, adding `MEMORY_LEXICAL=fts` for
+the last row.
