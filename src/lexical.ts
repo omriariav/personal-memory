@@ -70,13 +70,23 @@ export async function readLexical(path: string = LEXICAL_PATH): Promise<LexicalI
   return null;
 }
 
-function addDoc(idx: LexicalIndex, e: MemoryEntry): void {
-  const terms = tokenize(entrySearchText(e));
+function addDocTokens(idx: LexicalIndex, id: string, hash: string, terms: string[]): void {
   const ord = idx.docs.length;
-  idx.docs.push({ id: e.id, hash: hashEntry(e), len: terms.length });
+  idx.docs.push({ id, hash, len: terms.length });
   const tf = new Map<string, number>();
   for (const t of terms) tf.set(t, (tf.get(t) ?? 0) + 1);
   for (const [t, f] of tf) (idx.postings[t] ??= []).push([ord, f]);
+}
+
+function addDoc(idx: LexicalIndex, e: MemoryEntry): void {
+  addDocTokens(idx, e.id, hashEntry(e), tokenize(entrySearchText(e)));
+}
+
+/** Build the reference BM25 index from pre-tokenized docs (the catalog's `lex` column). */
+export function buildLexicalFromTokens(docs: { id: string; hash: string; tokens: string[] }[]): LexicalIndex {
+  const idx = emptyIndex();
+  for (const d of docs) addDocTokens(idx, d.id, d.hash, d.tokens);
+  return idx;
 }
 
 /** Build an index over `entries` in memory (also the search-time fallback). */
