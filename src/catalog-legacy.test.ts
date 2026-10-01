@@ -49,6 +49,7 @@ test("LegacyCatalog: filter/byIds/linked/referrers/bySourceIds/count/all over th
     assert.deepEqual((await c.filter({ person: "ana" })).map((m) => m.id), ["a", "d"]);
     assert.deepEqual((await c.filter({ graph: "team-x" })).map((m) => m.id), ["c"]);
     assert.deepEqual((await c.byIds(["c", "zzz", "a"])).map((m) => m.id), ["c", "a"]);
+    assert.deepEqual((await c.byIds(["a", "a", "c"])).map((m) => m.id), ["a", "c"], "duplicates collapse to their first occurrence, in request order");
     assert.deepEqual((await c.linked()).map((m) => m.id).sort(), ["a", "b"]);
     assert.deepEqual((await c.referrers("a")).map((m) => m.id).sort(), ["b", "c"]);
     assert.deepEqual((await c.bySourceIds(["slack:C1:1.0"])).map((m) => m.id), ["c"]);

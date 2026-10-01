@@ -47,6 +47,11 @@ export interface Catalog {
   readonly format: 1 | 2;
   /** Filter-matching entries (SQL prefilter where available; `matchesFilters` is always the authority). */
   filter(f: SearchFilters): Promise<CatalogEntryMeta[]>;
+  /**
+   * Metas for `ids`, in REQUEST order: duplicates collapse to their first
+   * occurrence, unknown ids are skipped (never thrown). Callers rank → call
+   * this → `hydrate` the result, so the ranked order must round-trip intact.
+   */
   byIds(ids: string[]): Promise<CatalogEntryMeta[]>;
   /** Every entry that links (`follows`) or is linked to — the complete chain-index input. */
   linked(): Promise<ChainSource[]>;
@@ -113,8 +118,6 @@ export class LegacyCatalog implements Catalog {
   }
 
   async byIds(ids: string[]): Promise<CatalogEntryMeta[]> {
-    // Preserves the caller's request order (dedup, skip unknown ids) — callers
-    // use this after ranking and expect `hydrate` to come back in that order.
     const byId = await this.byId();
     const seen = new Set<string>();
     const out: CatalogEntryMeta[] = [];
