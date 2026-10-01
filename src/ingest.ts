@@ -59,6 +59,7 @@ export function normalizeSourceId(raw: string): string {
       `invalid source id '${raw}' — expected '<scheme>:<rest>', e.g. slack:C123:1700000000.1 or gmail:<thread-id>`,
     );
   }
+  if (s.includes("|")) throw new Error(`invalid source id '${raw}' — must not contain '|'`);
   return `${s.slice(0, i).toLowerCase()}:${s.slice(i + 1)}`;
 }
 

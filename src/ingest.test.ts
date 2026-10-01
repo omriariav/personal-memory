@@ -36,3 +36,9 @@ test("entrySearchText: the title is repeated titleRepeat times so BM25 weights i
   assert.equal(count(twice), 2);
   assert.ok(twice.includes("body:\nWe agreed"));
 });
+
+test("normalizeSourceId: lowercases the scheme and rejects '|' (the catalog's list delimiter)", async () => {
+  const { normalizeSourceId } = await import("./ingest.js");
+  assert.equal(normalizeSourceId("Slack:C1:1.0"), "slack:C1:1.0");
+  assert.throws(() => normalizeSourceId("slack:C1|x"), /must not contain '\|'/);
+});

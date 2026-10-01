@@ -186,3 +186,54 @@ export interface MemoryRecord {
 export function packSlugs(xs: string[]): string {
   return xs.length ? `|${xs.join("|")}|` : "";
 }
+
+/**
+ * Pipe-delimited list column (same shape as `packSlugs`, for lists whose
+ * members are not slugs — source ids, follows, sources). Members must never
+ * contain `|`; `normalizeSourceId` enforces that for source ids.
+ */
+export function packList(xs: string[] | undefined): string {
+  return xs?.length ? `|${xs.join("|")}|` : "";
+}
+
+export function unpackList(s: string): string[] {
+  return s ? s.slice(1, -1).split("|") : [];
+}
+
+/** One row per logical entry in a new-format slot's `entries` table (Phase 3 catalog). */
+export interface CatalogEntryRow {
+  id: string;
+  date: string;
+  /** ISO date or "" when unset. */
+  updated: string;
+  type: string;
+  title: string;
+  people: string;
+  teams: string;
+  tags: string;
+  graphs: string;
+  follows: string;
+  sources: string;
+  source_ids: string;
+  hash: string;
+  /** Home copy's path, relative to the repo root. */
+  home_path: string;
+  /** JSON of graph → repo-relative path for every copy. */
+  paths_json: string;
+  /** Pre-tokenized `entrySearchText` (space-joined `tokenize` output) — the FTS column. */
+  lex: string;
+  /** Token count (BM25 document length). */
+  len: number;
+  /** Number of chunk rows this entry has in the `memory` table. */
+  chunks: number;
+}
+
+/** One row per materialized file in a new-format slot's `files` table. */
+export interface CatalogFileRow {
+  relpath: string;
+  graph: string;
+  id: string;
+  mtimeMs: number;
+  size: number;
+  hash: string;
+}
