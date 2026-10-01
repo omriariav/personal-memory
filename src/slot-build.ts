@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import { getEmbedder, type Embedder } from "./embed.js";
@@ -8,20 +8,27 @@ import { listGraphStores } from "./graphs.js";
 import {
   BUILDING_SUFFIX,
   CATALOG_VERSION,
+  DERIVED_ARTIFACTS,
   FRESH_SLOT,
   INDEX_ROOT,
+  LEGACY_SLOT,
   META_FILENAME,
   SlotMetaSchema,
   buildingDir,
   isSlotName,
   listBuiltSlots,
+  listSlots,
+  readActiveSync,
   readIndexMetaSync,
   resolveIndexSlotDetailed,
   slotDir,
   slotExists,
+  writeActive,
+  type ActiveFile,
   type SlotMeta,
 } from "./index-slots.js";
-import { ensureCatalogIndices, manifestFor, scanDirMtimes, syncCatalogTables, writeManifest } from "./catalog-sync.js";
+import { ENTRIES_TABLE, ensureCatalogIndices, manifestFor, readManifest, scanDirMtimes, syncCatalogTables, writeManifest } from "./catalog-sync.js";
+import { readLexical } from "./lexical.js";
 import {
   HEADERS_TABLE,
   INDEX_VERSION,
@@ -215,4 +222,169 @@ export async function buildSlot(
     headers,
     dryRun: false,
   });
+}
+
+/**
+ * Write `active.json`, recording the slot that was active as `previous` so
+ * the switch is one command to undo. `"previous"` names that recorded slot,
+ * which makes activate / activate-previous a round trip. `"legacy"` is a slot
+ * like any other here: it pins the legacy root explicitly instead of leaving
+ * the choice to the default. A slot that is not built is refused, naming the
+ * command that would build it.
+ */
+export async function activateSlot(name: string, root: string = INDEX_ROOT): Promise<{ active: ActiveFile; changed: boolean }> {
+  const current = resolveIndexSlotDetailed({ root, env: {} });
+  // Validates existence and resolves "previous"; throws for unknown names.
+  const target = resolveIndexSlotDetailed({ root, env: {}, override: name }).slot;
+  const pinned = readActiveSync(root);
+  if (target === current.slot && pinned?.slot === target) return { active: pinned, changed: false };
+  const active: ActiveFile = { slot: target, ...(current.slot !== target ? { previous: current.slot } : {}) };
+  await writeActive(active, root);
+  return { active, changed: true };
+}
+
+export interface PruneReport {
+  active: string;
+  removed: { slot: string; paths: string[] }[];
+  kept: string[];
+  confirmed: boolean;
+}
+
+/**
+ * Delete every NON-active slot's directory (interrupted `__building` builds
+ * included). The legacy root is a slot too, but it holds more than an index:
+ * it loses only its DERIVED_ARTIFACTS, and only while a new-format slot is
+ * what the store actually reads — the judgment sidecars at the root are
+ * shared by every slot and are never a candidate. Without `confirm` this
+ * plans and deletes nothing.
+ */
+export async function pruneSlots(opts: { confirm: boolean; root?: string }): Promise<PruneReport> {
+  const root = opts.root ?? INDEX_ROOT;
+  const slots = listSlots(root);
+  // The same resolution listSlots marked its rows with; the fallback covers
+  // an index-less store, where the resolved default has no row yet.
+  const active = slots.find((s) => s.active)?.name ?? resolveIndexSlotDetailed({ root, env: {} }).slot;
+  const removed: PruneReport["removed"] = [];
+  const kept: string[] = [];
+  for (const s of slots) {
+    if (s.active) {
+      kept.push(s.name);
+      continue;
+    }
+    if (s.name === LEGACY_SLOT) {
+      // The legacy root holds more than an index. Its rebuildable artifacts
+      // go only once a new-format slot is what the store actually reads, and
+      // only if a legacy index is there at all — whatever else sits at the
+      // root (the sidecars, the shared parse cache of an index-less store)
+      // belongs to every slot.
+      if (!s.built || active === LEGACY_SLOT) {
+        if (s.built) kept.push(LEGACY_SLOT);
+        continue;
+      }
+      const paths = DERIVED_ARTIFACTS.map((f) => join(root, f)).filter((p) => existsSync(p));
+      if (paths.length > 0) removed.push({ slot: LEGACY_SLOT, paths });
+      continue;
+    }
+    removed.push({ slot: s.name, paths: [s.dir] });
+  }
+  if (opts.confirm) {
+    for (const r of removed) for (const p of r.paths) await rm(p, { recursive: true, force: true });
+    const pinned = readActiveSync(root);
+    // A `previous` that no longer exists would make `--activate previous`
+    // fail at the worst moment; drop it instead.
+    if (pinned?.previous && removed.some((r) => r.slot === pinned.previous)) {
+      await writeActive({ slot: pinned.slot }, root);
+    }
+  }
+  return { active, removed, kept, confirmed: opts.confirm };
+}
+
+export interface SlotStatusRow {
+  name: string;
+  format: 1 | 2;
+  active: boolean;
+  previous: boolean;
+  built: boolean;
+  building: boolean;
+  entries: number | null;
+  chunks: number | null;
+  lastSync: string | null;
+}
+
+/** Row count of one table, or null when the table is absent or unreadable. */
+async function countRows(dir: string, table: string): Promise<number | null> {
+  try {
+    const db = await lancedb.connect(dir);
+    if (!(await db.tableNames()).includes(table)) return null;
+    return await (await db.openTable(table)).countRows();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every slot on disk with what it holds. Purely a read: an unbuilt slot is
+ * reported, never materialized, and a table that cannot be opened counts as
+ * null rather than failing the whole listing.
+ */
+export async function slotStatus(root: string = INDEX_ROOT): Promise<SlotStatusRow[]> {
+  const rows: SlotStatusRow[] = [];
+  for (const s of listSlots(root)) {
+    let entries: number | null = null;
+    let lastSync: string | null = null;
+    if (s.built && s.format === 1) {
+      const lex = await readLexical(join(s.dir, "lexical.json"));
+      entries = lex ? lex.docs.filter(Boolean).length : null;
+      try {
+        lastSync = (await stat(join(s.dir, META_FILENAME))).mtime.toISOString();
+      } catch {
+        lastSync = null;
+      }
+    } else if (s.built) {
+      entries = await countRows(s.dir, ENTRIES_TABLE);
+      lastSync = (await readManifest(s.dir))?.syncedAt ?? null;
+    }
+    rows.push({
+      name: s.name,
+      format: s.format,
+      active: s.active,
+      previous: s.previous,
+      built: s.built,
+      building: s.building,
+      entries,
+      chunks: s.built ? await countRows(s.dir, TABLE) : null,
+      lastSync,
+    });
+  }
+  // A store with no index at all resolves to a slot nothing has built yet;
+  // show it rather than leave the table without the slot every command uses.
+  const resolved = resolveIndexSlotDetailed({ root, env: {} });
+  if (!rows.some((r) => r.name === resolved.slot)) {
+    rows.push({
+      name: resolved.slot,
+      format: resolved.format,
+      active: true,
+      previous: false,
+      built: false,
+      building: false,
+      entries: null,
+      chunks: null,
+      lastSync: null,
+    });
+  }
+  return rows;
+}
+
+function slotState(r: SlotStatusRow): string {
+  if (r.active) return "active";
+  if (r.building) return "building";
+  if (r.previous) return "previous";
+  return r.built ? "built" : "-";
+}
+
+export function formatSlotTable(rows: SlotStatusRow[]): string {
+  const line = (r: SlotStatusRow) =>
+    `${r.name.padEnd(12)} ${String(r.format).padEnd(6)} ${slotState(r).padEnd(9)} ${String(r.entries ?? "-").padStart(7)} ${String(r.chunks ?? "-").padStart(7)}  ${r.lastSync ?? "-"}`;
+  const header = `${"slot".padEnd(12)} ${"format".padEnd(6)} ${"state".padEnd(9)} ${"entries".padStart(7)} ${"chunks".padStart(7)}  last sync`;
+  return [header, ...rows.map(line)].join("\n");
 }

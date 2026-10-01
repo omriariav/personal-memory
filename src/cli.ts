@@ -526,7 +526,7 @@ async function cmdIndex(argv: string[]) {
   // `--build` may be given with no slot name, in which case buildSlot picks
   // the default; parseArgs needs that spelled as an explicit empty value.
   const args = argv.map((a, i) => (a === "--build" && (argv[i + 1]?.startsWith("-") ?? true) ? "--build=" : a));
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args,
     options: {
       force: { type: "boolean" },
@@ -536,8 +536,48 @@ async function cmdIndex(argv: string[]) {
       "header-batch": { type: "string" },
       build: { type: "string" },
       "dry-run": { type: "boolean" },
+      activate: { type: "string" },
+      prune: { type: "boolean" },
+      confirm: { type: "boolean" },
     },
+    allowPositionals: true,
   });
+  if (positionals[0] === "slots") {
+    const { slotStatus, formatSlotTable } = await import("./slot-build.js");
+    console.log(formatSlotTable(await slotStatus()));
+    const r = resolveIndexSlotDetailed();
+    if (r.warning) console.log(`⚠ ${r.warning}`);
+    return;
+  }
+  if (positionals.length > 0) throw new Error(`usage: memory index slots   (unknown argument '${positionals[0]}')`);
+  if (values.activate !== undefined) {
+    const { activateSlot } = await import("./slot-build.js");
+    const r = await activateSlot(values.activate);
+    if (!r.changed) {
+      console.log(`✓ '${r.active.slot}' is already the active slot`);
+      return;
+    }
+    const rollback = r.active.previous ? ` (previous: ${r.active.previous} — roll back with: index --activate previous)` : "";
+    console.log(`✓ active slot: ${r.active.slot}${rollback}`);
+    return;
+  }
+  if (values.prune) {
+    const { pruneSlots } = await import("./slot-build.js");
+    const r = await pruneSlots({ confirm: Boolean(values.confirm) });
+    if (r.removed.length === 0) {
+      console.log(`(nothing to prune — only the active slot '${r.active}' exists)`);
+      return;
+    }
+    for (const x of r.removed) console.log(`${r.confirmed ? "✓ removed" : "would remove"} slot '${x.slot}': ${x.paths.map(rel).join(", ")}`);
+    if (r.confirmed) {
+      console.log(`kept active slot '${r.active}'; sidecars untouched`);
+      return;
+    }
+    console.error(`\nnothing was deleted — re-run with --confirm (the active slot '${r.active}' and the judgment sidecars are never touched)`);
+    process.exitCode = 2;
+    return;
+  }
+  if (values.confirm) throw new Error("usage: --confirm applies only to: memory index --prune --confirm");
   if (values.build !== undefined) {
     const { buildSlot, formatBuildReport } = await import("./slot-build.js");
     const r = await buildSlot({ name: values.build || undefined, dryRun: Boolean(values["dry-run"]), force: Boolean(values.force) });
@@ -1241,6 +1281,9 @@ Usage:
   memory index [--force|--reembed] [--rebuild] [--optimize [--header-batch N]]   # --rebuild: rebuild the synced slots' catalog/lexical tables reusing vectors; --reembed (= --force): drop and re-embed; --optimize compacts + backfills title vectors (memory_headers) in bounded batches
   memory index --build [<slot>] [--dry-run] [--force]       # build a complete new-format index beside the current one (vectors reused; never activates)
             # the slot name defaults to 'next' (or 'main' when the store has no index at all)
+  memory index --activate <slot|previous>                   # switch the active slot (writes .index/active.json; the old one is kept as 'previous')
+  memory index --prune [--confirm]                          # delete non-active slots' derived artifacts (never sidecars; plan only without --confirm)
+  memory index slots                                        # status table: name, format, state, entries, chunks, last sync
   memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep] [--no-cutoff] [--index-slot <name>]
             # each quoted positional is a separate phrasing; all are fused (2-4 recommended)
             # --deep: recall-over-precision preset (k=40, wider candidate pool)
