@@ -189,12 +189,20 @@ export async function dropCatalogTables(db: lancedb.Connection): Promise<void> {
  * per store, keyed ROOT-relative (relative(root, dir), not store-relative).
  * Only entries/ is recursed two levels deep; summaries/ subdirectories (none
  * exist today) are not walked.
+ *
+ * Rounded to the nearest whole millisecond: `readManifest`/`writeManifest`
+ * round-trip these values through JSON (exact for any double), but a value
+ * that itself came from resetting a directory's mtime (a hand-synced clone,
+ * a test) can lose a fraction of a millisecond in the OS's own mtime-set
+ * path. Rounding keeps both sides of the read-path freshness comparison
+ * (`LanceCatalog.refresh`) exact without weakening it — genuine directory
+ * mutations differ by whole milliseconds at minimum.
  */
 export async function scanDirMtimes(stores: Pick<Store, "entriesDir" | "summariesDir">[], root: string): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
   const record = async (dir: string) => {
     if (!existsSync(dir)) return;
-    out[relative(root, dir)] = (await stat(dir)).mtimeMs;
+    out[relative(root, dir)] = Math.round((await stat(dir)).mtimeMs);
   };
   for (const s of stores) {
     await record(s.entriesDir);

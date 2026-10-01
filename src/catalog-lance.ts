@@ -12,9 +12,6 @@ import { FrontmatterSchema, type CatalogEntryRow, type MemoryEntry } from "./sch
 
 type MetaRow = Omit<CatalogEntryRow, "lex">;
 
-/** See refresh(): sub-ms mtime noise (filesystem clock, a Date round-trip) never counts as a change. */
-const MTIME_EPSILON_MS = 5;
-
 /** Reads a new-format slot's `entries` table; bodies are read from disk only for hits. */
 export class LanceCatalog implements Catalog {
   readonly kind = "lance" as const;
@@ -169,15 +166,7 @@ export class LanceCatalog implements Catalog {
       const dirs = await scanDirMtimes(this.stores, this.root);
       const keys = new Set([...Object.keys(dirs), ...Object.keys(manifest.dirs)]);
       for (const k of keys) {
-        const a = dirs[k];
-        const b = manifest.dirs[k];
-        // A dir appearing/disappearing (key only on one side) is always
-        // stale. Otherwise tolerate MTIME_EPSILON_MS: `Date` has no
-        // sub-millisecond resolution, so anything that round-trips a stored
-        // mtime through one (a hand-reset mtime, a coarser filesystem clock)
-        // can read back a few tenths of a ms off with no real change —
-        // negligible next to a genuine mutation's multi-ms-or-more gap.
-        if (a === undefined || b === undefined || Math.abs(a - b) > MTIME_EPSILON_MS) {
+        if (dirs[k] !== manifest.dirs[k]) {
           stale = true;
           break;
         }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
@@ -46,9 +46,15 @@ test("refresh: builds a missing catalog, then stays quiet until a directory chan
     // In-place edit (same path): dir mtime unchanged → NOT detected without strict.
     const beta = join(root, "memory", "entries", "2026", "02", "2026-02-01-beta.md");
     const dirStat = join(root, "memory", "entries", "2026", "02");
+    const dirMtimeMs = statSync(dirStat).mtimeMs;
     const before = readFileSync(beta, "utf8");
     writeFileSync(beta, before.replace("Beta body", "Beta body edited"));
-    utimesSync(dirStat, new Date(0), new Date((await readManifest(slot))!.dirs["memory/entries/2026/02"]!));
+    // Restore the directory's mtime with full precision: a raw seconds NUMBER,
+    // never a `Date` — `Date` truncates to whole milliseconds and utimesSync's
+    // internal unix-timestamp conversion loses still more precision from there
+    // at this epoch's magnitude (measured ~0.1-0.8ms drift via `new Date(ms)`;
+    // a raw-number round-trip of `mtimeMs / 1000` is accurate to ~0.001ms).
+    utimesSync(dirStat, new Date(0), dirMtimeMs / 1000);
     assert.deepEqual(await quiet.refresh(), { refreshed: false }, "documented gap: in-place edits need strict or a writer sync");
     process.env.MEMORY_SYNC = "strict";
     try {
