@@ -5,6 +5,9 @@
 
 set -euo pipefail
 
+# Resolved before the cd below, while the invocation cwd still applies.
+title_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/entry-title.cjs"
+
 input="$(cat)"
 
 command="$(node -e '
@@ -44,10 +47,13 @@ for store in memory memory-public memory-graphs/*/; do
     continue
   fi
 
+  # Parsed with gray-matter rather than read off the `title:` line: long titles
+  # are folded YAML block scalars whose key line is just `>-`.
+  # See scripts/entry-title.cjs.
   newest="$(git -C "$store" diff --cached --name-only 2>/dev/null | grep -E '^entries/.*\.md$' | head -n1 || true)"
   title=""
   if [ -n "$newest" ] && [ -f "$store/$newest" ]; then
-    title="$(sed -n 's/^title:[[:space:]]*//p' "$store/$newest" | head -n1 | sed "s/^[\"']//; s/[\"']$//")"
+    title="$(node "$title_script" "$store/$newest" 2>/dev/null || true)"
   fi
 
   git -C "$store" commit -q \

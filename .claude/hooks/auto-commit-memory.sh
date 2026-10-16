@@ -9,6 +9,9 @@
 # log), then stages + commits the new/changed Markdown inside memory/.
 set -euo pipefail
 
+# Resolved before the cd below, while the invocation cwd still applies.
+title_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/entry-title.cjs"
+
 input="$(cat)"
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""')"
 
@@ -36,11 +39,15 @@ for store in memory memory-public memory-graphs/*/; do
     continue
   fi
 
-  # Derive a message from the title of the newest staged entry, if any.
+  # Derive a message from the title of the newest staged entry, if any. The
+  # title is parsed with gray-matter rather than read off the `title:` line,
+  # because long titles are folded YAML block scalars whose key line is just
+  # `>-` (see scripts/entry-title.cjs). An extraction failure yields an empty
+  # title and the default below; it never fails the commit.
   newest="$(git -C "$store" diff --cached --name-only 2>/dev/null | grep -E '^entries/.*\.md$' | head -n1)"
   title=""
   if [ -n "$newest" ] && [ -f "$store/$newest" ]; then
-    title="$(sed -n 's/^title:[[:space:]]*//p' "$store/$newest" | head -n1 | sed "s/^[\"']//; s/[\"']$//")"
+    title="$(node "$title_script" "$store/$newest" 2>/dev/null || true)"
   fi
   msg="Log memory: ${title:-entry update}"
 
