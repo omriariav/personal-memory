@@ -428,6 +428,10 @@ MEMORY_EMBEDDINGS=openai npm run index -- --force
 MEMORY_EMBEDDINGS=voyage npm run index -- --force
 ```
 
+Indexing embeds text in batches of 64 — one model call or API request per
+batch (set `MEMORY_EMBED_BATCH=<n>` to change it) — so peak memory stays
+bounded as the store grows.
+
 Do not publish a populated `memory/` directory or screenshots containing private
 names, events, or relationships unless you have intentionally sanitized them.
 
