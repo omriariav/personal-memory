@@ -12,33 +12,106 @@ export interface Embedder {
 const LOCAL_MODEL = process.env.MEMORY_EMBED_MODEL ?? "Xenova/bge-small-en-v1.5";
 const LOCAL_DIM = 384; // bge-small-en-v1.5
 
+/**
+ * Texts per model call or API request. One padded tensor (or one HTTP body)
+ * per call keeps peak memory bounded — a whole-corpus re-embed would otherwise
+ * build a single [N, tokens] batch, or POST the entire store in one request.
+ * Override with MEMORY_EMBED_BATCH.
+ */
+export const EMBED_BATCH = 64;
+
+/** MEMORY_EMBED_BATCH when it is a positive integer, else EMBED_BATCH. */
+export function embedBatchSize(raw = process.env.MEMORY_EMBED_BATCH): number {
+  if (!raw?.trim()) return EMBED_BATCH;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : EMBED_BATCH;
+}
+
+/** Run `embedBatch` over consecutive slices of at most `batchSize`, preserving order. */
+async function inBatches(
+  texts: string[],
+  batchSize: number,
+  embedBatch: (slice: string[]) => Promise<number[][]>,
+): Promise<number[][]> {
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new RangeError(`embed batch size must be a positive integer, got ${batchSize}`);
+  }
+  const vectors: number[][] = [];
+  for (let i = 0; i < texts.length; i += batchSize) {
+    for (const v of await embedBatch(texts.slice(i, i + batchSize))) vectors.push(v);
+  }
+  return vectors;
+}
+
+/**
+ * Embed `texts` through any embedder in slices of at most `batchSize`. The
+ * built-in embedders already slice internally; this is for callers holding an
+ * embedder that does not.
+ */
+export async function embedInBatches(
+  embedder: Embedder,
+  texts: string[],
+  batchSize = embedBatchSize(),
+): Promise<number[][]> {
+  return inBatches(texts, batchSize, (slice) => embedder.embed(slice));
+}
+
+type Extractor = (
+  texts: string[],
+  opts: { pooling: "mean"; normalize: true },
+) => Promise<{ tolist(): number[][] }>;
+
+async function loadLocalExtractor(): Promise<Extractor> {
+  const { pipeline, env } = await import("@huggingface/transformers");
+  // Keep model cache inside the repo (gitignored) for reproducibility.
+  env.cacheDir = process.env.MEMORY_MODEL_CACHE ?? "./.cache/transformers";
+  return (await pipeline("feature-extraction", LOCAL_MODEL)) as unknown as Extractor;
+}
+
 /** Local in-process embedder using Transformers.js feature-extraction. */
-class LocalEmbedder implements Embedder {
+export class LocalEmbedder implements Embedder {
   readonly id = `local:${LOCAL_MODEL}`;
   readonly dim = LOCAL_DIM;
-  private extractor: Promise<any> | null = null;
+  private extractor: Promise<Extractor> | null = null;
 
-  private async pipe() {
-    if (!this.extractor) {
-      const { pipeline, env } = await import("@huggingface/transformers");
-      // Keep model cache inside the repo (gitignored) for reproducibility.
-      env.cacheDir = process.env.MEMORY_MODEL_CACHE ?? "./.cache/transformers";
-      this.extractor = pipeline("feature-extraction", LOCAL_MODEL);
-    }
+  /** `load` is injectable so tests can exercise batching without a model. */
+  constructor(private readonly load: () => Promise<Extractor> = loadLocalExtractor) {}
+
+  private pipe(): Promise<Extractor> {
+    if (!this.extractor) this.extractor = this.load();
     return this.extractor;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     const extractor = await this.pipe();
-    const out = await extractor(texts, { pooling: "mean", normalize: true });
-    // out is a Tensor [n, dim]; tolist() -> number[][]
-    return out.tolist() as number[][];
+    // Each slice is a Tensor [n, dim]; tolist() -> number[][]
+    return inBatches(texts, embedBatchSize(), async (slice) =>
+      (await extractor(slice, { pooling: "mean", normalize: true })).tolist(),
+    );
   }
 }
 
+/** One embeddings request against an OpenAI-shaped `/v1/embeddings` endpoint. */
+async function postEmbeddings(
+  url: string,
+  key: string,
+  model: string,
+  input: string[],
+  label: string,
+): Promise<number[][]> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model, input }),
+  });
+  if (!res.ok) throw new Error(`${label} embeddings failed: ${res.status} ${await res.text()}`);
+  const json = (await res.json()) as { data: { embedding: number[] }[] };
+  return json.data.map((d) => d.embedding);
+}
+
 /** OpenAI-compatible embeddings (set MEMORY_EMBEDDINGS=openai + OPENAI_API_KEY). */
-class OpenAIEmbedder implements Embedder {
+export class OpenAIEmbedder implements Embedder {
   readonly id: string;
   readonly dim: number;
   constructor(
@@ -52,19 +125,14 @@ class OpenAIEmbedder implements Embedder {
     if (texts.length === 0) return [];
     const key = process.env.OPENAI_API_KEY;
     if (!key) throw new Error("OPENAI_API_KEY required for MEMORY_EMBEDDINGS=openai");
-    const res = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model: this.model, input: texts }),
-    });
-    if (!res.ok) throw new Error(`OpenAI embeddings failed: ${res.status} ${await res.text()}`);
-    const json = (await res.json()) as { data: { embedding: number[] }[] };
-    return json.data.map((d) => d.embedding);
+    return inBatches(texts, embedBatchSize(), (slice) =>
+      postEmbeddings("https://api.openai.com/v1/embeddings", key, this.model, slice, "OpenAI"),
+    );
   }
 }
 
 /** Voyage AI embeddings (set MEMORY_EMBEDDINGS=voyage + VOYAGE_API_KEY). */
-class VoyageEmbedder implements Embedder {
+export class VoyageEmbedder implements Embedder {
   readonly id: string;
   readonly dim: number;
   constructor(
@@ -78,14 +146,31 @@ class VoyageEmbedder implements Embedder {
     if (texts.length === 0) return [];
     const key = process.env.VOYAGE_API_KEY;
     if (!key) throw new Error("VOYAGE_API_KEY required for MEMORY_EMBEDDINGS=voyage");
-    const res = await fetch("https://api.voyageai.com/v1/embeddings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model: this.model, input: texts }),
+    return inBatches(texts, embedBatchSize(), (slice) =>
+      postEmbeddings("https://api.voyageai.com/v1/embeddings", key, this.model, slice, "Voyage"),
+    );
+  }
+}
+
+/**
+ * Deterministic, model-free embedder for tests and CI (MEMORY_EMBEDDINGS=fake):
+ * a hashed bag of lowercase tokens, L2-normalized. Shares tokens ⇒ close
+ * vectors, so retrieval behaves sensibly without any download.
+ */
+export class FakeEmbedder implements Embedder {
+  readonly id = "fake:hashed-bag";
+  readonly dim = 64;
+  async embed(texts: string[]): Promise<number[][]> {
+    return texts.map((t) => {
+      const v = new Array<number>(this.dim).fill(0);
+      for (const tok of t.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+        let h = 2166136261;
+        for (let i = 0; i < tok.length; i++) h = Math.imul(h ^ tok.charCodeAt(i), 16777619);
+        v[(h >>> 0) % this.dim]! += 1;
+      }
+      const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0)) || 1;
+      return v.map((x) => x / norm);
     });
-    if (!res.ok) throw new Error(`Voyage embeddings failed: ${res.status} ${await res.text()}`);
-    const json = (await res.json()) as { data: { embedding: number[] }[] };
-    return json.data.map((d) => d.embedding);
   }
 }
 
@@ -105,8 +190,11 @@ export function getEmbedder(): Embedder {
     case "local":
       cached = new LocalEmbedder();
       break;
+    case "fake":
+      cached = new FakeEmbedder();
+      break;
     default:
-      throw new Error(`Unknown MEMORY_EMBEDDINGS=${backend} (use local|openai|voyage)`);
+      throw new Error(`Unknown MEMORY_EMBEDDINGS=${backend} (use local|openai|voyage|fake)`);
   }
   return cached;
 }

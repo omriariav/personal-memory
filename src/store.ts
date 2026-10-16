@@ -1,15 +1,178 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import type { OptimizeStats } from "@lancedb/lancedb";
 import { getEmbedder, type Embedder } from "./embed.js";
-import { chunkEntry, displayChunkText, entrySearchText, hashEntry, loadAllEntries, INDEX_DIR } from "./ingest.js";
+import { ROOT, chunkEntry, displayChunkText, entrySearchText, hasAnyEntryFile, hashEntry, headerText, loadAllEntries } from "./ingest.js";
+import { listGraphStores } from "./graphs.js";
+import {
+  CATALOG_VERSION,
+  META_FILENAME,
+  SlotMetaSchema,
+  listBuiltSlots,
+  readActiveSync,
+  readIndexMetaSync,
+  resolveIndexSlotDetailed,
+  slotDir,
+  slotFormat,
+  warnResolution,
+  writeActive,
+  type IndexMeta,
+  type SlotMeta,
+  type SlotResolution,
+} from "./index-slots.js";
+import {
+  dropCatalogTables,
+  ensureCatalogIndices,
+  manifestFor,
+  openCatalogTables,
+  readManifest,
+  scanDirMtimes,
+  syncCatalogTables,
+  writeManifest,
+} from "./catalog-sync.js";
+import { openCatalog, type Catalog } from "./catalog.js";
 import { packSlugs, type GraphId, type MemoryEntry, type MemoryRecord } from "./schema.js";
-import { readLexical, buildLexical, syncLexical, bm25Scores, tokenize } from "./lexical.js";
+import { LEXICAL_PATH, syncLexical, tokenize } from "./lexical.js";
 import { buildChainIndex, type ChainAnnotation } from "./chains.js";
+import {
+  applyFilters,
+  bestRank,
+  candidatePool,
+  digestAnnotations,
+  EXHAUSTIVE_LIMIT,
+  rankCandidates,
+  shouldExhaustivelyAppend,
+  SLUG_RE,
+  whereClause,
+  type QueryOrigin,
+  type QuerySpec,
+  type RankList,
+  type SearchCompleteness,
+  type SearchFilters,
+  type TimelineState,
+} from "./ranking.js";
+import { resolveTunables, type RankingTunables } from "./ranking-tunables.js";
+import { detectPeople, getAliasIndex, type Detection } from "./people.js";
 
-const META_PATH = join(INDEX_DIR, "meta.json");
-const TABLE = "memory";
+/**
+ * Person slugs used by any entry — the alias index's implicit vocabulary.
+ *
+ * `slot` is the slot the caller already resolved (`--index-slot`): without it
+ * a slot-pinned read would still take this list from the DEFAULT slot, paying
+ * a full Markdown parse through `LegacyCatalog` on every alias lookup.
+ */
+export async function knownPeople(slot?: string): Promise<Set<string>> {
+  const people = new Set<string>();
+  for (const m of await (await openCatalog(slot ? { slot } : {})).all()) for (const p of m.people) people.add(p);
+  return people;
+}
+
+/**
+ * Entity leg input: how many question people each candidate carries, with
+ * ubiquitous slugs (present in more than ENTITY_MAX_DF of candidates) ignored
+ * so an omnipresent manager or tag never dominates.
+ */
+function entityMatchesFor(slugs: string[], filtered: Pick<MemoryEntry, "id" | "people">[], maxDf: number): Map<string, number> {
+  const matches = new Map<string, number>();
+  if (slugs.length === 0 || filtered.length === 0) return matches;
+  const df = new Map<string, number>();
+  for (const e of filtered) for (const p of e.people) if (slugs.includes(p)) df.set(p, (df.get(p) ?? 0) + 1);
+  const counted = slugs.filter((s) => (df.get(s) ?? 0) / filtered.length <= maxDf);
+  if (counted.length === 0) return matches;
+  for (const e of filtered) {
+    const n = e.people.filter((p) => counted.includes(p)).length;
+    if (n > 0) matches.set(e.id, n);
+  }
+  return matches;
+}
+
+// The pure ranking layer lives in ranking.ts; re-exported so existing
+// importers (cli, server, recall, membership) keep working unchanged.
+export { applyFilters, type QueryOrigin, type QuerySpec, type SearchCompleteness, type SearchFilters };
+
+export const TABLE = "memory";
+/**
+ * One row per entry: the embedding of title + metadata alone (the header
+ * leg). Lives BESIDE the chunk table so adding it never touches existing
+ * vectors: changed entries get their row at sync time, the rest are
+ * backfilled in bounded batches by `optimizeIndex` / `index --optimize`.
+ */
+export const HEADERS_TABLE = "memory_headers";
+export const HEADER_BACKFILL_BATCH = 500;
+
+/**
+ * Supplies an already-computed vector for a row, keyed by that row's natural
+ * key (`rowId` for chunks, `id` for headers), so a row whose text is
+ * unchanged is copied instead of re-embedded — `index --build` reuses the
+ * active slot's vectors this way. `undefined` means "embed this text".
+ */
+export type VectorSource = (rowKey: string) => number[] | undefined;
+
+/** Same filter columns as the chunk table so `whereClause` prefilters apply. */
+export interface HeaderRecord {
+  id: string;
+  hash: string;
+  date: string;
+  type: string;
+  people: string;
+  teams: string;
+  tags: string;
+  graphs: string;
+  text: string;
+  vector: number[];
+}
+
+export async function headerRecordsFor(
+  entries: MemoryEntry[],
+  embedder: Embedder,
+  reuse?: VectorSource,
+): Promise<HeaderRecord[]> {
+  const texts = entries.map(headerText);
+  const vectors: (number[] | undefined)[] = entries.map((e) => reuse?.(e.id));
+  const missing = vectors.flatMap((v, i) => (v ? [] : [i]));
+  if (missing.length > 0) {
+    const fresh = await embedder.embed(missing.map((i) => texts[i]!));
+    missing.forEach((i, j) => {
+      vectors[i] = fresh[j]!;
+    });
+  }
+  return entries.map((e, i) => ({
+    id: e.id,
+    hash: hashEntry(e),
+    date: e.date,
+    type: e.type,
+    people: packSlugs(e.people),
+    teams: packSlugs(e.teams),
+    tags: packSlugs(e.tags),
+    graphs: packSlugs(e.graphs),
+    text: texts[i]!,
+    vector: vectors[i]!,
+  }));
+}
+
+/** The header leg is opt-in (HEADER_LEG_WEIGHT > 0); its table is not built otherwise. */
+export function headerLegEnabled(): boolean {
+  return resolveTunables().HEADER_LEG_WEIGHT > 0;
+}
+
+async function openHeaders(db: lancedb.Connection) {
+  const names = await db.tableNames();
+  return names.includes(HEADERS_TABLE) ? db.openTable(HEADERS_TABLE) : null;
+}
+
+async function upsertHeaders(db: lancedb.Connection, records: HeaderRecord[]): Promise<void> {
+  if (records.length === 0) return;
+  const rows = records as unknown as Record<string, unknown>[];
+  const table = await openHeaders(db);
+  if (!table) {
+    await db.createTable(HEADERS_TABLE, rows);
+    return;
+  }
+  await table.delete(`id IN (${sqlList(records.map((r) => r.id))})`);
+  await table.add(rows);
+}
 
 /**
  * Bump when the row schema or indexing semantics change: a mismatch (including
@@ -20,25 +183,25 @@ const TABLE = "memory";
  * (N named graphs, synced-copy model). v6: the home graph renamed
  * `private` → `default` (persisted membership strings must rewrite).
  */
-const INDEX_VERSION = 6;
+export const INDEX_VERSION = 6;
 
-interface IndexMeta {
-  embedderId: string;
-  dim: number;
-  indexVersion?: number;
+function currentSlot(): SlotResolution {
+  return resolveIndexSlotDetailed();
 }
-
-async function readMeta(): Promise<IndexMeta | null> {
-  try {
-    return JSON.parse(await readFile(META_PATH, "utf8")) as IndexMeta;
-  } catch {
-    return null;
-  }
+/** The index directory of the slot this call targets — resolved lazily, never captured at load. */
+function indexDir(): string {
+  return currentSlot().dir;
 }
-
-async function writeMeta(meta: IndexMeta): Promise<void> {
-  await mkdir(INDEX_DIR, { recursive: true });
-  await writeFile(META_PATH, JSON.stringify(meta, null, 2), "utf8");
+function metaPath(dir: string): string {
+  return join(dir, META_FILENAME);
+}
+async function readMeta(dir: string): Promise<IndexMeta | null> {
+  return readIndexMetaSync(dir);
+}
+/** Legacy root meta: shape frozen forever (`{embedderId, dim, indexVersion}`). */
+async function writeLegacyMeta(dir: string, meta: { embedderId: string; dim: number; indexVersion: number }): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 }
 
 async function openTable(db: lancedb.Connection) {
@@ -51,16 +214,34 @@ function sqlList(ids: string[]): string {
   return ids.map((i) => `'${i}'`).join(", ");
 }
 
+/** The chunk table's primary key. The one place this string is built. */
+export function chunkRowId(id: string, chunkIndex: number): string {
+  return `${id}#${chunkIndex}`;
+}
+
 /** Build the chunk-level records (with vectors) for a set of entries. */
-async function recordsFor(entries: MemoryEntry[], embedder: Embedder): Promise<MemoryRecord[]> {
-  const pending: { entry: MemoryEntry; chunkIndex: number; text: string; hash: string }[] = [];
+export async function recordsFor(
+  entries: MemoryEntry[],
+  embedder: Embedder,
+  reuse?: VectorSource,
+): Promise<MemoryRecord[]> {
+  const pending: { entry: MemoryEntry; rowId: string; chunkIndex: number; text: string; hash: string; vector?: number[] }[] = [];
   for (const e of entries) {
     const hash = hashEntry(e);
-    chunkEntry(e).forEach((text, chunkIndex) => pending.push({ entry: e, chunkIndex, text, hash }));
+    chunkEntry(e).forEach((text, chunkIndex) => {
+      const rowId = chunkRowId(e.id, chunkIndex);
+      pending.push({ entry: e, rowId, chunkIndex, text, hash, vector: reuse?.(rowId) });
+    });
   }
-  const vectors = await embedder.embed(pending.map((p) => p.text));
-  return pending.map((p, i) => ({
-    rowId: `${p.entry.id}#${p.chunkIndex}`,
+  const missing = pending.filter((p) => !p.vector);
+  if (missing.length > 0) {
+    const vectors = await embedder.embed(missing.map((p) => p.text));
+    missing.forEach((p, i) => {
+      p.vector = vectors[i]!;
+    });
+  }
+  return pending.map((p) => ({
+    rowId: p.rowId,
     id: p.entry.id,
     chunkIndex: p.chunkIndex,
     date: p.entry.date,
@@ -73,33 +254,75 @@ async function recordsFor(entries: MemoryEntry[], embedder: Embedder): Promise<M
     graphs: packSlugs(p.entry.graphs),
     hash: p.hash,
     text: p.text,
-    vector: vectors[i]!,
+    vector: p.vector!,
   }));
 }
 
-/**
- * Incrementally sync the vector index with the Markdown source of truth.
- * Re-embeds only entries whose content hash changed; drops deleted entries.
- * Rebuilds from scratch if the embedder (model/dim) changed.
- */
-export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
+export interface SlotSyncStats {
+  slot: string;
+  format: 1 | 2;
   added: number;
   removed: number;
   unchanged: number;
-}> {
-  const embedder = getEmbedder();
-  const entries = await loadAllEntries();
-  await mkdir(INDEX_DIR, { recursive: true });
-  const db = await lancedb.connect(INDEX_DIR);
+  /** Why this slot was skipped. Only ever set for a NON-active slot. */
+  error?: string;
+}
 
-  const meta = await readMeta();
+export interface SyncIndexResult {
+  /** The active slot's numbers (what existing callers print). */
+  added: number;
+  removed: number;
+  unchanged: number;
+  slots: SlotSyncStats[];
+}
+
+/**
+ * Supplies the rows for a set of changed entries. Shared across slots by
+ * `syncIndex` so a changed chunk is embedded exactly once no matter how many
+ * slots hold it; rows are keyed by entry id, never reused wholesale, because
+ * graph membership is not covered by the content hash.
+ */
+type RecordSource = (changed: MemoryEntry[]) => Promise<MemoryRecord[]>;
+type HeaderSource = (changed: MemoryEntry[]) => Promise<HeaderRecord[]>;
+
+/**
+ * A format-2 slot whose persisted catalog version is not the current one. Its
+ * entries/files tables and their FTS index are not comparable to today's, so
+ * they are dropped and rebuilt from the Markdown — the hash-based incremental
+ * diff is version-blind and would see nothing to do. Vectors are untouched: a
+ * catalog layout change never invalidates an embedding.
+ */
+async function catalogVersionStale(dir: string, meta: IndexMeta | null): Promise<boolean> {
+  if (meta?.format !== 2 || meta.catalogVersion !== CATALOG_VERSION) return true;
+  const manifest = await readManifest(dir);
+  return manifest === null || manifest.catalogVersion !== CATALOG_VERSION;
+}
+
+/**
+ * Sync ONE slot's chunk (and header) tables against the Markdown source of
+ * truth: re-embed only entries whose content hash or graph membership
+ * changed, drop deleted ones, rebuild from scratch when the embedder or the
+ * row schema moved on. Writes that slot's meta.json in its own format.
+ */
+async function syncSlotVectors(
+  db: lancedb.Connection,
+  dir: string,
+  format: 1 | 2,
+  entries: MemoryEntry[],
+  embedder: Embedder,
+  opts: { force: boolean; records: RecordSource; headers: HeaderSource },
+): Promise<{ added: number; removed: number; unchanged: number }> {
+  const meta = await readMeta(dir);
   const embedderChanged = !meta || meta.embedderId !== embedder.id || meta.dim !== embedder.dim;
   const versionChanged = meta?.indexVersion !== INDEX_VERSION;
+  // Only these discard vectors. A catalog version change does NOT: it is the
+  // derived tables it invalidates, and they are rebuilt by the caller.
   const force = opts.force || embedderChanged || versionChanged;
 
   if (force) {
     const names = await db.tableNames();
     if (names.includes(TABLE)) await db.dropTable(TABLE);
+    if (names.includes(HEADERS_TABLE)) await db.dropTable(HEADERS_TABLE);
   }
 
   let table = await openTable(db);
@@ -132,7 +355,7 @@ export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
     await table.delete(`id IN (${sqlList(toDelete)})`);
   }
 
-  const newRecords = changed.length ? await recordsFor(changed, embedder) : [];
+  const newRecords = changed.length ? await opts.records(changed) : [];
   if (newRecords.length > 0) {
     const rows = newRecords as unknown as Record<string, unknown>[];
     if (!table) {
@@ -142,9 +365,142 @@ export async function syncIndex(opts: { force?: boolean } = {}): Promise<{
     }
   }
 
-  await writeMeta({ embedderId: embedder.id, dim: embedder.dim, indexVersion: INDEX_VERSION });
-  await syncLexical(entries);
+  // Header rows (only while the header leg is enabled — measured as a
+  // trade-off, off by default): refreshed for exactly the entries re-embedded
+  // above; removed entries drop out; untouched entries keep whatever they had
+  // (or nothing, until the backfill reaches them).
+  const headers = await openHeaders(db);
+  if (headers && removedIds.length > 0) await headers.delete(`id IN (${sqlList(removedIds)})`);
+  if (changed.length > 0 && headerLegEnabled()) await upsertHeaders(db, await opts.headers(changed));
+
+  if (format === 1) {
+    await writeLegacyMeta(dir, { embedderId: embedder.id, dim: embedder.dim, indexVersion: INDEX_VERSION });
+  } else {
+    // `builtAt` and the header-table flag belong to the build that created the
+    // slot; a sync refreshes the rest without re-dating it.
+    const previous = meta?.format === 2 ? meta : null;
+    const next: SlotMeta = SlotMetaSchema.parse({
+      format: 2,
+      indexVersion: INDEX_VERSION,
+      embedderId: embedder.id,
+      dim: embedder.dim,
+      catalogVersion: CATALOG_VERSION,
+      vectorIndex: "flat",
+      headerTable: previous?.headerTable ?? headerLegEnabled(),
+      lexical: "fts",
+      builtAt: previous?.builtAt ?? new Date().toISOString(),
+    } satisfies SlotMeta);
+    await mkdir(dir, { recursive: true });
+    await writeFile(metaPath(dir), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  }
   return { added: changed.length, removed: removedIds.length, unchanged };
+}
+
+/**
+ * Incrementally sync the index with the Markdown source of truth — for the
+ * active slot AND every other built slot, so a `next` slot under evaluation
+ * never goes stale behind the one in use. Entries are embedded once and the
+ * resulting rows are shared across the slots that need them.
+ *
+ * `rebuild` drops and rebuilds the derived catalog/lexical tables of every
+ * slot it touches, keeping their vectors; `force` drops the vectors too.
+ */
+export async function syncIndex(
+  opts: { force?: boolean; rebuild?: boolean; slots?: "active" | "all" } = {},
+): Promise<SyncIndexResult> {
+  const embedder = getEmbedder();
+  const entries = await loadAllEntries();
+  const active = currentSlot();
+  const names =
+    opts.slots === "active"
+      ? [active.slot]
+      : [active.slot, ...listBuiltSlots().map((s) => s.name).filter((n) => n !== active.slot)];
+
+  // One embedding pass for all slots: rows are computed on first demand and
+  // replayed per entry id afterwards.
+  const chunkMemo = new Map<string, MemoryRecord[]>();
+  const records: RecordSource = async (changed) => {
+    const missing = changed.filter((e) => !chunkMemo.has(e.id));
+    if (missing.length > 0) {
+      for (const e of missing) chunkMemo.set(e.id, []);
+      for (const r of await recordsFor(missing, embedder)) chunkMemo.get(r.id)!.push(r);
+    }
+    return changed.flatMap((e) => chunkMemo.get(e.id) ?? []);
+  };
+  const headerMemo = new Map<string, HeaderRecord>();
+  const headers: HeaderSource = async (changed) => {
+    const missing = changed.filter((e) => !headerMemo.has(e.id));
+    if (missing.length > 0) for (const r of await headerRecordsFor(missing, embedder)) headerMemo.set(r.id, r);
+    return changed.flatMap((e) => {
+      const r = headerMemo.get(e.id);
+      return r ? [r] : [];
+    });
+  };
+
+  const syncOne = async (slot: string): Promise<SlotSyncStats> => {
+    const dir = slotDir(slot);
+    const format = slotFormat(slot);
+    await mkdir(dir, { recursive: true });
+    const db = await lancedb.connect(dir);
+    // Read BEFORE the sync rewrites meta.json, or the bump is invisible.
+    const catalogStale = format === 2 && (await catalogVersionStale(dir, await readMeta(dir)));
+    const r = await syncSlotVectors(db, dir, format, entries, embedder, { force: Boolean(opts.force), records, headers });
+    if (format === 1) {
+      // The legacy slot's lexical leg: `.index/lexical.json`, shape frozen.
+      if (opts.rebuild) await rm(LEXICAL_PATH, { force: true });
+      await syncLexical(entries);
+    } else {
+      if (opts.rebuild || catalogStale) await dropCatalogTables(db);
+      await syncCatalogTables(db, entries, { root: ROOT });
+      await ensureCatalogIndices(db);
+      await writeManifest(dir, await manifestFor(db, await scanDirMtimes(listGraphStores(), ROOT), await readManifest(dir)));
+    }
+    return { slot, format, added: r.added, removed: r.removed, unchanged: r.unchanged };
+  };
+
+  // The active slot is the one the caller is about to read from, so its
+  // failure still propagates. A corrupt slot BESIDE it must never fail the
+  // write that triggered the sync — the Markdown is already on disk.
+  const slots: SlotSyncStats[] = [await syncOne(active.slot)];
+  for (const slot of names.slice(1)) {
+    try {
+      slots.push(await syncOne(slot));
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      slots.push({ slot, format: slotFormat(slot), added: 0, removed: 0, unchanged: 0, error });
+    }
+  }
+  // A fresh store took the new-format default implicitly. Now that the slot
+  // exists on disk, record it: from here on the choice is written down rather
+  // than re-derived from "the root looks empty".
+  if (active.source === "default" && active.format === 2 && !readActiveSync()) await writeActive({ slot: active.slot });
+
+  const first = slots[0]!;
+  return { added: first.added, removed: first.removed, unchanged: first.unchanged, slots };
+}
+
+/**
+ * The catalog a WRITE reads through.
+ *
+ * A read refuses an unbuilt slot (`openCatalog`) so that asking a question can
+ * never silently materialize an index. A writer may not refuse: `add`, `copy`,
+ * `move`, `remove`, `link` and the slug writers have always worked on a store
+ * whose `.index/` was never built, and built it on the way out. So an unbuilt
+ * new-format slot is indexed FIRST and then opened — the same `syncIndex` the
+ * write would have run at the end, just moved ahead of the read it needs.
+ *
+ * Nothing happens for a legacy slot (it parses Markdown directly), for an
+ * already-built slot, or for a store with no entries at all (`EmptyCatalog`).
+ * An explicitly named slot always exists — `resolveIndexSlotDetailed` rejects
+ * an unknown one — so the branch below is only ever the implicit fresh slot.
+ */
+export async function openCatalogForWrite(slot?: string): Promise<Catalog> {
+  const r = resolveIndexSlotDetailed(slot ? { override: slot } : {});
+  warnResolution(r);
+  if (r.format === 2 && !existsSync(metaPath(r.dir)) && (await hasAnyEntryFile())) {
+    await syncIndex();
+  }
+  return openCatalog(slot ? { slot } : {});
 }
 
 export interface IndexStatus {
@@ -155,24 +511,180 @@ export interface IndexStatus {
   staleEntries: number;
   missingEntries: number;
   chunkRows: number;
+  slot: string;
+  format: 1 | 2;
+}
+
+export interface HeaderStatus {
+  entries: number;
+  /** Entries whose header row matches their current content hash. */
+  headers: number;
+  /** Entries still awaiting a header row (backfill). */
+  missing: number;
+}
+
+/** Which entries lack a current header row: (id, hash) not present in the headers table. */
+async function headerGaps(db: lancedb.Connection, entries: MemoryEntry[]): Promise<MemoryEntry[]> {
+  const headers = await openHeaders(db);
+  const have = new Map<string, string>();
+  if (headers) {
+    const rows = (await headers.query().select(["id", "hash"]).toArray()) as { id: string; hash: string }[];
+    for (const r of rows) have.set(r.id, r.hash);
+  }
+  return entries.filter((e) => have.get(e.id) !== hashEntry(e));
+}
+
+/** Read-only header coverage for `maintenance`. Never loads the embedder. */
+export async function headerStatus(): Promise<HeaderStatus> {
+  const entries = await loadAllEntries();
+  let missing = entries.length;
+  const dir = indexDir();
+  try {
+    // Same rule as `indexStatus`: connecting would create the slot directory,
+    // and a status read may not do that.
+    if (existsSync(dir)) {
+      const db = await lancedb.connect(dir);
+      missing = (await headerGaps(db, entries)).length;
+    }
+  } catch {
+    // no index yet
+  }
+  return { entries: entries.length, headers: entries.length - missing, missing };
+}
+
+/**
+ * Embed header rows for up to `batch` entries that lack one. Bounded so the
+ * weekly job and `index --optimize` never block for a whole corpus; existing
+ * chunk vectors are never touched.
+ */
+export async function backfillHeaders(opts: { batch?: number } = {}): Promise<{ embedded: number; remaining: number }> {
+  if (!headerLegEnabled()) return { embedded: 0, remaining: 0 };
+  const batch = opts.batch ?? HEADER_BACKFILL_BATCH;
+  const entries = await loadAllEntries();
+  const dir = indexDir();
+  await mkdir(dir, { recursive: true });
+  const db = await lancedb.connect(dir);
+  const gaps = await headerGaps(db, entries);
+  const todo = gaps.slice(0, batch);
+  if (todo.length > 0) await upsertHeaders(db, await headerRecordsFor(todo, getEmbedder()));
+  return { embedded: todo.length, remaining: gaps.length - todo.length };
+}
+
+/** Test seam: forget every header row (simulates an index built before the header leg existed). */
+export async function dropHeadersForTest(): Promise<void> {
+  const db = await lancedb.connect(indexDir());
+  if ((await db.tableNames()).includes(HEADERS_TABLE)) await db.dropTable(HEADERS_TABLE);
+}
+
+/** What `optimizeIndex` did to ONE slot. */
+export interface SlotOptimizeStats {
+  slot: string;
+  format: 1 | 2;
+  /**
+   * The catalog's FTS coverage once this call finished — `unindexed` is 0
+   * whenever the fold succeeded. Null for a slot with no FTS index at all:
+   * every format-1 slot (its lexical leg is `lexical.json`), and a format-2
+   * slot whose catalog is still empty.
+   */
+  fts: { indexed: number; unindexed: number } | null;
+  /** Why this slot was skipped. Only ever set for a NON-active slot. */
+  error?: string;
 }
 
 export interface OptimizeIndexResult {
   tableExists: boolean;
   cleanupOlderThan: string;
   stats: OptimizeStats | null;
+  /** Header backfill progress made by this call. */
+  headers: { embedded: number; remaining: number };
+  /** One row per built slot, the active one first. */
+  slots: SlotOptimizeStats[];
 }
 
-export async function optimizeIndex(cleanupOlderThanDays = 7): Promise<OptimizeIndexResult> {
-  await mkdir(INDEX_DIR, { recursive: true });
-  const db = await lancedb.connect(INDEX_DIR);
-  const table = await openTable(db);
+/**
+ * FTS coverage of a catalog's `lex` column. The index name is read from the
+ * table rather than assumed, so a LanceDB naming change surfaces as "no FTS
+ * index" instead of a silent `undefined` stat.
+ */
+async function ftsCoverage(entries: lancedb.Table): Promise<SlotOptimizeStats["fts"]> {
+  const idx = (await entries.listIndices()).find((i) => i.columns.includes("lex"));
+  if (!idx) return null;
+  const stats = await entries.indexStats(idx.name);
+  return stats ? { indexed: stats.numIndexedRows, unindexed: stats.numUnindexedRows } : null;
+}
+
+/**
+ * Compact EVERY built slot, not just the active one: `ensureCatalogIndices`
+ * deliberately never optimizes, so rows a sync appended after the FTS index
+ * was created stay searchable-but-unfolded until this runs. That is true of a
+ * `next` slot under evaluation as much as of the slot in use, so both are
+ * folded here — and a broken slot beside the active one is reported rather
+ * than allowed to abort the rest (the same isolation rule as `syncIndex`).
+ *
+ * Only the ACTIVE slot's numbers go in `tableExists`/`stats`/`headers`, which
+ * is what existing callers print; `slots` is additive.
+ */
+export async function optimizeIndex(
+  cleanupOlderThanDays = 7,
+  opts: { headerBatch?: number } = {},
+): Promise<OptimizeIndexResult> {
   const cleanupOlderThan = new Date(Date.now() - cleanupOlderThanDays * 24 * 60 * 60 * 1000);
-  if (!table) {
-    return { tableExists: false, cleanupOlderThan: cleanupOlderThan.toISOString(), stats: null };
+  const active = currentSlot();
+  const names = [active.slot, ...listBuiltSlots().map((s) => s.name).filter((n) => n !== active.slot)];
+  let tableExists = false;
+  let stats: OptimizeStats | null = null;
+  let headers = { embedded: 0, remaining: 0 };
+
+  const optimizeOne = async (slot: string, format: 1 | 2): Promise<SlotOptimizeStats> => {
+    const isActive = slot === active.slot;
+    const dir = slotDir(slot);
+    // Same rule as `indexStatus`/`headerStatus`: `lancedb.connect` CREATES the
+    // directory it is handed, and compacting a slot nothing has built must not
+    // leave an empty `slots/<name>/` behind for `index slots` to report.
+    if (!existsSync(dir)) return { slot, format, fts: null };
+    const db = await lancedb.connect(dir);
+    const table = await openTable(db);
+    if (table) {
+      const s = await table.optimize({ cleanupOlderThan });
+      if (isActive) {
+        tableExists = true;
+        stats = s;
+      }
+    }
+    // The backfill only ever writes to the active slot, and it runs before
+    // that slot's header table is compacted so the rows it just wrote are
+    // folded too. Gated on the chunk table, as it has always been: an
+    // unbuilt index is not a reason to start embedding titles.
+    if (isActive && table) headers = await backfillHeaders({ batch: opts.headerBatch });
+    const ht = await openHeaders(db);
+    if (ht) await ht.optimize({ cleanupOlderThan });
+    let fts: SlotOptimizeStats["fts"] = null;
+    if (format === 2) {
+      const { entries, files } = await openCatalogTables(db);
+      if (entries) {
+        await entries.optimize({ cleanupOlderThan }); // folds the un-indexed rows into the FTS index
+        fts = await ftsCoverage(entries);
+      }
+      if (files) await files.optimize({ cleanupOlderThan });
+    }
+    return { slot, format, fts };
+  };
+
+  // The active slot is the one every read answers from, so its failure still
+  // propagates; a slot beside it must never fail the weekly job.
+  const slots: SlotOptimizeStats[] = [await optimizeOne(active.slot, slotFormat(active.slot))];
+  for (const slot of names.slice(1)) {
+    // Resolved BEFORE the risky work and reused in the catch: a handler that
+    // re-derives anything from the slot it is reporting on can throw again,
+    // outside any try, and take the remaining slots with it.
+    const format = slotFormat(slot);
+    try {
+      slots.push(await optimizeOne(slot, format));
+    } catch (err) {
+      slots.push({ slot, format, fts: null, error: err instanceof Error ? err.message : String(err) });
+    }
   }
-  const stats = await table.optimize({ cleanupOlderThan });
-  return { tableExists: true, cleanupOlderThan: cleanupOlderThan.toISOString(), stats };
+  return { tableExists, cleanupOlderThan: cleanupOlderThan.toISOString(), stats, headers, slots };
 }
 
 /**
@@ -181,7 +693,9 @@ export async function optimizeIndex(cleanupOlderThanDays = 7): Promise<OptimizeI
  */
 export async function indexStatus(): Promise<IndexStatus> {
   const entries = await loadAllEntries();
-  const meta = await readMeta();
+  const slot = currentSlot();
+  const dir = slot.dir;
+  const meta = await readMeta(dir);
   const base: IndexStatus = {
     embedderId: meta?.embedderId ?? null,
     dim: meta?.dim ?? null,
@@ -190,11 +704,17 @@ export async function indexStatus(): Promise<IndexStatus> {
     staleEntries: 0,
     missingEntries: entries.length,
     chunkRows: 0,
+    slot: slot.slot,
+    format: slot.format,
   };
 
   let table: lancedb.Table | null = null;
   try {
-    const db = await lancedb.connect(INDEX_DIR);
+    // `lancedb.connect` CREATES the directory it is handed. Reporting on a
+    // slot that was never built must not bring it into existence, so an
+    // absent directory answers from `base` without connecting at all.
+    if (!existsSync(dir)) return base;
+    const db = await lancedb.connect(dir);
     table = await openTable(db);
   } catch {
     return base;
@@ -221,30 +741,13 @@ export async function indexStatus(): Promise<IndexStatus> {
   return { ...base, indexedEntries, staleEntries, missingEntries, chunkRows: rows.length };
 }
 
-export interface SearchFilters {
-  person?: string;
-  type?: string;
-  team?: string;
-  tag?: string;
-  since?: string; // ISO date inclusive
-  until?: string; // ISO date inclusive
-  /** Scope to entries that are MEMBERS of this graph; undefined = all graphs. */
-  graph?: GraphId;
-}
-
-export type QueryOrigin = "primary" | "agent" | "cli";
-
-export interface QuerySpec {
-  text: string;
-  origin: QueryOrigin;
-  weight: number;
-}
-
-export type SearchCompleteness = "auto" | "complete" | "complete-if-small" | "none";
-
 export interface SearchHitReason {
   semanticRank?: number;
   lexicalRank?: number;
+  /** Rank in the entity list (entries carrying people named in the question). */
+  entityRank?: number;
+  /** Best rank in the header (title + metadata vector) lists. */
+  headerRank?: number;
   matchedTerms: string[];
   retrievalSignals: string[];
 }
@@ -255,7 +758,71 @@ export interface SearchHit {
   bestChunk: string;
   /** Timeline context when the entry belongs to a `follows` chain. */
   chain?: ChainAnnotation;
+  /** Retrieved hits whose explicit links lent this entry part of their score. */
+  spreadFrom?: string[];
+  /** On a summary: its cited sources that were also returned. */
+  digestOf?: string[];
+  /** On a raw entry: returned summaries that cite it. */
+  coveredBy?: string[];
+  /** Raw cross-encoder score when the hit was in the reranked block. */
+  rerankScore?: number;
   reasons?: SearchHitReason;
+}
+
+/**
+ * Implicit neighbours: entries sharing at least `minShared` RARE slugs
+ * (people/teams/tags present in ≤ `maxDf` of the candidates — ubiquitous
+ * slugs carry no signal). A ranking-time view only; nothing is persisted.
+ */
+function rareEntityEdges(
+  filtered: Pick<MemoryEntry, "id" | "people" | "teams" | "tags">[],
+  minShared: number,
+  maxDf: number,
+): Map<string, string[]> {
+  const n = filtered.length;
+  const holders = new Map<string, string[]>();
+  for (const e of filtered) {
+    for (const slug of [...e.people, ...e.teams, ...e.tags]) (holders.get(slug) ?? holders.set(slug, []).get(slug)!).push(e.id);
+  }
+  const shared = new Map<string, Map<string, number>>();
+  for (const ids of holders.values()) {
+    if (ids.length < 2 || ids.length / n > maxDf) continue;
+    for (const a of ids) {
+      const row = shared.get(a) ?? shared.set(a, new Map()).get(a)!;
+      for (const b of ids) if (b !== a) row.set(b, (row.get(b) ?? 0) + 1);
+    }
+  }
+  const edges = new Map<string, string[]>();
+  for (const [a, row] of shared) {
+    const ns = [...row].filter(([, c]) => c >= minShared).map(([b]) => b);
+    if (ns.length) edges.set(a, ns);
+  }
+  return edges;
+}
+
+/**
+ * Explicit neighbours within the candidate space: `follows` both ways (via
+ * the chain index) and `sources` both ways (a digest and the raw entries it
+ * cites). Nothing inferred — only links a human or agent asserted.
+ */
+function explicitEdges(
+  filtered: Pick<MemoryEntry, "id" | "sources">[],
+  filteredIds: Set<string>,
+  chainIndex: Map<string, ChainAnnotation>,
+): Map<string, string[]> {
+  const edges = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    if (a === b || !filteredIds.has(a) || !filteredIds.has(b)) return;
+    (edges.get(a) ?? edges.set(a, new Set()).get(a)!).add(b);
+    (edges.get(b) ?? edges.set(b, new Set()).get(b)!).add(a);
+  };
+  for (const e of filtered) {
+    for (const s of e.sources ?? []) link(e.id, s);
+    const chain = chainIndex.get(e.id);
+    for (const p of chain?.prev ?? []) link(e.id, p);
+    for (const n of chain?.next ?? []) link(e.id, n);
+  }
+  return new Map([...edges].map(([id, set]) => [id, [...set]]));
 }
 
 export interface SearchReport {
@@ -270,6 +837,14 @@ export interface SearchReport {
   k: number;
   pool: number;
   chunkRows: number;
+  /** The index slot this search read, and its format. */
+  index: { slot: string; format: 1 | 2 };
+  /** Relative score cutoff outcome (never applied on exhaustive runs). */
+  cutoff?: { tau: number; applied: boolean; dropped: number };
+  /** People named in the question (resolved through memory/people/ aliases). */
+  entities?: { people: string[]; ambiguous: string[] };
+  /** Reranker pass, when requested. */
+  rerank?: { model: string; n: number; ms: number };
 }
 
 export interface SearchResult {
@@ -278,75 +853,22 @@ export interface SearchResult {
   report: SearchReport;
 }
 
-function matchesFilters(e: MemoryEntry, f: SearchFilters): boolean {
-  if (f.person && !e.people.includes(f.person)) return false;
-  if (f.team && !e.teams.includes(f.team)) return false;
-  if (f.tag && !e.tags.includes(f.tag)) return false;
-  if (f.type && e.type !== f.type) return false;
-  if (f.since && e.date < f.since) return false;
-  if (f.until && e.date > f.until) return false;
-  if (f.graph && !e.graphs.includes(f.graph)) return false;
-  return true;
-}
-
-/** Shared metadata filter — the single JS authority over the source of truth. */
-export function applyFilters(entries: MemoryEntry[], f: SearchFilters): MemoryEntry[] {
-  return entries.filter((e) => matchesFilters(e, f));
-}
-
-function hasAnyFilter(f: SearchFilters): boolean {
-  return Boolean(f.person || f.team || f.tag || f.type || f.since || f.until || f.graph);
-}
-
-const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/**
- * SQL prefilter mirroring `matchesFilters`, so vector-search truncation
- * happens INSIDE the filtered candidate space. Values failing validation are
- * skipped here (never interpolated); `matchesFilters` still enforces them.
- */
-function whereClause(f: SearchFilters): string | undefined {
-  const parts: string[] = [];
-  if (f.type && SLUG_RE.test(f.type)) parts.push(`type = '${f.type}'`);
-  if (f.since && DATE_RE.test(f.since)) parts.push(`date >= '${f.since}'`);
-  if (f.until && DATE_RE.test(f.until)) parts.push(`date <= '${f.until}'`);
-  if (f.person && SLUG_RE.test(f.person)) parts.push(`people LIKE '%|${f.person}|%'`);
-  if (f.team && SLUG_RE.test(f.team)) parts.push(`teams LIKE '%|${f.team}|%'`);
-  if (f.tag && SLUG_RE.test(f.tag)) parts.push(`tags LIKE '%|${f.tag}|%'`);
-  if (f.graph && SLUG_RE.test(f.graph)) parts.push(`graphs LIKE '%|${f.graph}|%'`);
-  return parts.length ? parts.join(" AND ") : undefined;
-}
-
-function rankToRRF(ids: string[], k0 = 60): Map<string, number> {
-  const m = new Map<string, number>();
-  ids.forEach((id, i) => m.set(id, 1 / (k0 + i + 1)));
-  return m;
-}
-
-interface RankList {
-  kind: "semantic" | "lexical";
-  query: QuerySpec;
-  ids: string[];
-}
-
 export interface SearchOptions {
   /** Recall-over-precision preset: wider candidate pools (callers also raise k). */
   deep?: boolean;
   completeness?: SearchCompleteness;
   completeLimit?: number;
+  /** Clock for the recency bonus (default: wall clock). Fixed by the eval harness. */
+  now?: number;
+  /** Per-run ranking overrides (harness sweeps); env MEMORY_RANK_* still applies. */
+  tunables?: Partial<RankingTunables>;
+  /** Disable the relative score cutoff for this run (`--no-cutoff`). */
+  noCutoff?: boolean;
+  /** Re-score the top RERANK_N candidates with the local cross-encoder (`--rerank`, MEMORY_RERANK=1). */
+  rerank?: boolean;
+  /** Explicit index slot (`--index-slot`); default: env/active.json. */
+  slot?: string;
 }
-
-/**
- * Filtered result sets at or below this size take the exhaustive path: every
- * matching entry enters the ranking, so a filtered query cannot miss — only
- * order (and `k`) limits what is printed.
- */
-const EXHAUSTIVE_LIMIT = 200;
-
-/** Max recency multiplier bonus (2%) and its e-folding age in days. */
-const RECENCY_EPS = 0.02;
-const RECENCY_DECAY_DAYS = 90;
 
 export const DEFAULT_COMPLETE_LIMIT = EXHAUSTIVE_LIMIT;
 
@@ -359,31 +881,6 @@ function querySpecs(queries: string[] | QuerySpec[]): QuerySpec[] {
     )
     .map((q) => ({ ...q, text: q.text.trim(), weight: Number.isFinite(q.weight) ? q.weight : 1 }))
     .filter((q) => q.text && q.weight > 0);
-}
-
-function shouldExhaustivelyAppend(
-  filters: SearchFilters,
-  candidateCount: number,
-  completeness: SearchCompleteness,
-  completeLimit: number,
-): boolean {
-  if (candidateCount === 0) return false;
-  if (completeness === "complete") return true;
-  if (completeness === "complete-if-small") return candidateCount <= completeLimit;
-  if (completeness === "auto") return hasAnyFilter(filters) && candidateCount <= completeLimit;
-  return false;
-}
-
-function bestRank(lists: RankList[], id: string, kind: RankList["kind"]): number | undefined {
-  let best: number | undefined;
-  for (const list of lists) {
-    if (list.kind !== kind) continue;
-    const rank = list.ids.indexOf(id);
-    if (rank === -1) continue;
-    const oneBased = rank + 1;
-    if (best === undefined || oneBased < best) best = oneBased;
-  }
-  return best;
 }
 
 function matchedTerms(entry: MemoryEntry, qs: QuerySpec[]): string[] {
@@ -413,6 +910,11 @@ export async function searchDetailed(
   const qs = querySpecs(queries);
   const completeness = opts.completeness ?? "auto";
   const completeLimit = opts.completeLimit ?? DEFAULT_COMPLETE_LIMIT;
+  const tunables = resolveTunables({ ...opts.tunables, ...(opts.noCutoff ? { CUTOFF_TAU: 0 } : {}) });
+  const now = opts.now ?? Date.now();
+  // Opened before the early returns: every report names the slot it read.
+  const catalog = await openCatalog(opts.slot ? { slot: opts.slot } : {});
+  const index = { slot: catalog.slot, format: catalog.format };
   if (qs.length === 0) {
     return {
       queries: [],
@@ -429,13 +931,14 @@ export async function searchDetailed(
         k,
         pool: 0,
         chunkRows: 0,
+        index,
       },
     };
   }
 
-  const entries = await loadAllEntries();
-  const byId = new Map(entries.map((e) => [e.id, e]));
-  const filtered = applyFilters(entries, filters);
+  const filtered = await catalog.filter(filters);
+  const metaById = new Map(filtered.map((m) => [m.id, m]));
+  const chainIndex = buildChainIndex(await catalog.linked());
   if (filtered.length === 0) {
     return {
       queries: qs,
@@ -452,22 +955,18 @@ export async function searchDetailed(
         k,
         pool: 0,
         chunkRows: 0,
+        index,
       },
     };
   }
   const filteredIds = new Set(filtered.map((e) => e.id));
   const exhaustive = shouldExhaustivelyAppend(filters, filtered.length, completeness, completeLimit);
 
-  const db = await lancedb.connect(INDEX_DIR);
+  const db = await lancedb.connect(catalog.dir);
   const table = await openTable(db);
 
-  // Candidate pool scales with the corpus so the vector leg's truncation
-  // horizon grows as the store does (the old fixed 40 was a recall ceiling).
   const chunkRows = table ? await table.countRows() : 0;
-  const mult = opts.deep ? 12 : 8;
-  const pool = exhaustive
-    ? Math.min(4096, Math.max(filtered.length * 8, 40))
-    : Math.min(512, Math.max(k * mult, 40, Math.ceil(chunkRows / 20)));
+  const pool = candidatePool({ exhaustive, filteredCount: filtered.length, k, deep: Boolean(opts.deep), chunkRows });
   const where = whereClause(filters);
 
   // --- semantic ranking lists, one per phrasing (best chunk per entry) ---
@@ -491,67 +990,100 @@ export async function searchDetailed(
       }
       rankLists.push({ kind: "semantic", query, ids });
     }
-  }
 
-  // --- lexical ranking lists, one per phrasing, within the filtered set ---
-  const lexIdx = (await readLexical()) ?? buildLexical(entries);
-  for (const q of qs) {
-    const scores = bm25Scores(q.text, lexIdx);
-    const ids = [...scores.entries()]
-      .filter(([id]) => filteredIds.has(id))
-      .sort((a, b) => b[1] - a[1])
-      .map(([id]) => id);
-    rankLists.push({ kind: "lexical", query: q, ids });
-  }
-
-  // --- reciprocal rank fusion across all lists ---
-  const fused = new Map<string, number>();
-  for (const list of rankLists) {
-    for (const [id, s] of rankToRRF(list.ids)) {
-      fused.set(id, (fused.get(id) ?? 0) + s * list.query.weight);
+    // Header leg: the same phrasings against title+metadata vectors. Entries
+    // without a header row yet simply don't appear here (graceful backfill).
+    if (tunables.HEADER_LEG_WEIGHT > 0) {
+      const headers = await openHeaders(db);
+      if (headers && (await headers.countRows()) > 0) {
+        for (const [i, qvec] of vecs.entries()) {
+          let hq = headers.search(qvec) as lancedb.VectorQuery;
+          if (where) hq = hq.where(where) as lancedb.VectorQuery;
+          const rows = (await hq.select(["id"]).limit(pool).toArray()) as { id: string }[];
+          const ids = rows.map((r) => r.id).filter((id) => filteredIds.has(id));
+          rankLists.push({ kind: "header", query: qs[i]!, ids: [...new Set(ids)] });
+        }
+      }
     }
   }
 
-  // Mild recency boost: at most +2%, decaying over ~3 months of age (by
-  // max(date, updated)). Sized to break genuine near-ties toward the newer
-  // entry while staying below the ~0.3-1% adjacent-rank RRF gap × a few
-  // lists, so any entry with a real relevance lead is untouchable.
-  const now = Date.now();
-  for (const [id, score] of fused) {
-    const e = byId.get(id);
-    if (!e) continue;
-    const ref = e.updated && e.updated > e.date ? e.updated : e.date;
-    const ageDays = Math.max(0, (now - Date.parse(ref)) / 86_400_000);
-    fused.set(id, score * (1 + RECENCY_EPS * Math.exp(-ageDays / RECENCY_DECAY_DAYS)));
+  // --- lexical ranking lists, one per phrasing, within the filtered set ---
+  // `filters` is handed over as a SQL prefilter so an FTS backend spends its
+  // limit inside the filtered space; `filteredIds` remains the authority.
+  for (const q of qs) {
+    const hits = await catalog.lexical(q.text, filteredIds, pool, filters);
+    rankLists.push({ kind: "lexical", query: q, ids: hits.map((h) => h.id) });
   }
 
-  let ranked = [...fused.entries()]
-    .filter(([id]) => byId.has(id))
-    .sort((a, b) => b[1] - a[1])
-    .map(([id, score]) => ({ id, score }));
-  const retrievalSignalCount = ranked.length;
-
-  if (exhaustive) {
-    // Recall guarantee: append filter-matching entries with no retrieval
-    // signal (newest first) so nothing is droppable before the k-cut.
-    const present = new Set(ranked.map((r) => r.id));
-    const rest = filtered
-      .filter((e) => !present.has(e.id))
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .map((e) => ({ id: e.id, score: 0 }));
-    ranked = [...ranked, ...rest];
+  // --- fusion, recency, timeline, completeness append, k-cut: the pure pipeline ---
+  const timeline = new Map<string, TimelineState>();
+  for (const [id, ann] of chainIndex) {
+    const resolved = ann.status === "resolved";
+    const successor = ann.superseded ? ann.current.id : resolved ? ann.resolvedBy : undefined;
+    timeline.set(id, {
+      superseded: ann.superseded,
+      resolved,
+      latest: ann.latest.id === id,
+      ...(successor ? { successor } : {}),
+    });
   }
+  const edges = tunables.SPREAD_EDGE_FRACTION > 0 ? explicitEdges(filtered, filteredIds, chainIndex) : undefined;
+  const entityEdges =
+    tunables.SPREAD_ENTITY_FRACTION > 0 ? rareEntityEdges(filtered, tunables.SPREAD_MIN_SHARED, tunables.SPREAD_RARE_DF) : undefined;
+  let detection: Detection | undefined;
+  let entityMatches: Map<string, number> | undefined;
+  if (tunables.ENTITY_LEG_WEIGHT > 0) {
+    detection = detectPeople(qs[0]!.text, await getAliasIndex(() => knownPeople(index.slot)));
+    // Only names that needed an alias to resolve: a typed slug already
+    // matches lexically, and boosting its every entry cost exact-title lookups.
+    entityMatches = entityMatchesFor(detection.aliased, filtered, tunables.ENTITY_MAX_DF);
+  }
+  const rankInput = { rankLists, filtered, exhaustive, k, timeline, edges, entityEdges, entityMatches };
+  let ranked = rankCandidates(rankInput, tunables, now);
+  if (ranked.entityList) rankLists.push(ranked.entityList);
 
+  // Opt-in second pass: a local cross-encoder re-scores the top signal-bearing
+  // candidates; the pure pipeline blends them, then lift/timeline/cutoff apply.
+  let rerankReport: SearchReport["rerank"];
+  if (opts.rerank ?? process.env.MEMORY_RERANK === "1") {
+    const { getReranker } = await import("./rerank.js");
+    const reranker = getReranker();
+    const block = ranked.hits.filter((h) => h.score > 0).slice(0, tunables.RERANK_N);
+    // The k-cut may have hidden part of the block: rank once more without a cut.
+    const wide = block.length < tunables.RERANK_N ? rankCandidates({ ...rankInput, k: tunables.RERANK_N }, tunables, now) : ranked;
+    const candidates = wide.hits.filter((h) => h.score > 0).slice(0, tunables.RERANK_N);
+    const t0 = performance.now();
+    const docsEntries = await catalog.hydrate(candidates.map((h) => metaById.get(h.id)!));
+    const docs = docsEntries.map((e, i) =>
+      `${e.title}\n${displayChunkText(bestChunk.get(candidates[i]!.id) ?? e.body)}`.slice(0, tunables.RERANK_MAX_CHARS),
+    );
+    const scores = await reranker.score(qs[0]!.text, docs);
+    const rerankScores = new Map(candidates.map((h, i) => [h.id, scores[i]!]));
+    ranked = rankCandidates({ ...rankInput, rerankScores }, tunables, now);
+    rerankReport = { model: reranker.id, n: candidates.length, ms: Math.round(performance.now() - t0) };
+  }
+  const { retrievalSignalCount, limitedByK } = ranked;
   const consideredCount = exhaustive ? filtered.length : retrievalSignalCount;
-  const chainIndex = buildChainIndex(entries);
-  const hits = ranked.slice(0, k).map(({ id, score }) => {
+  // Bodies are read once, for exactly the hits that are returned.
+  const hitEntries = await catalog.hydrate(ranked.hits.map((h) => metaById.get(h.id)!));
+  const byId = new Map(hitEntries.map((e) => [e.id, e]));
+  const digests = digestAnnotations(ranked.hits.map(({ id }) => ({ id, sources: metaById.get(id)?.sources })));
+  const hits = ranked.hits.map(({ id, score, breakdown, spreadFrom }) => {
+    const rerankScore = breakdown.rerank;
     const entry = byId.get(id)!;
     const chain = chainIndex.get(id);
+    const digest = digests.get(id);
     const semanticRank = bestRank(rankLists, id, "semantic");
     const lexicalRank = bestRank(rankLists, id, "lexical");
+    const entityRank = bestRank(rankLists, id, "entity");
+    const headerRank = bestRank(rankLists, id, "header");
     const retrievalSignals = [
       ...(semanticRank !== undefined ? ["semantic"] : []),
       ...(lexicalRank !== undefined ? ["lexical"] : []),
+      ...(headerRank !== undefined ? ["header"] : []),
+      ...(entityRank !== undefined ? ["entity"] : []),
+      ...(breakdown.rerank !== undefined ? ["rerank"] : []),
+      ...(breakdown.spread > 0 ? ["spread"] : []),
       ...(score === 0 && exhaustive ? ["complete-scan"] : []),
     ];
     return {
@@ -559,9 +1091,15 @@ export async function searchDetailed(
       score,
       bestChunk: displayChunkText(bestChunk.get(id) ?? entry.body.slice(0, 300)),
       ...(chain ? { chain } : {}),
+      ...(spreadFrom ? { spreadFrom } : {}),
+      ...(digest?.digestOf ? { digestOf: digest.digestOf } : {}),
+      ...(digest?.coveredBy ? { coveredBy: digest.coveredBy } : {}),
+      ...(rerankScore !== undefined ? { rerankScore } : {}),
       reasons: {
         ...(semanticRank !== undefined ? { semanticRank } : {}),
         ...(lexicalRank !== undefined ? { lexicalRank } : {}),
+        ...(headerRank !== undefined ? { headerRank } : {}),
+        ...(entityRank !== undefined ? { entityRank } : {}),
         matchedTerms: matchedTerms(entry, qs),
         retrievalSignals,
       },
@@ -578,10 +1116,14 @@ export async function searchDetailed(
       consideredCount,
       retrievalSignalCount,
       returnedCount: hits.length,
-      limitedByK: ranked.length > k,
+      limitedByK,
       k,
       pool,
       chunkRows,
+      index,
+      cutoff: { tau: tunables.CUTOFF_TAU, ...ranked.cutoff },
+      ...(detection ? { entities: { people: detection.slugs, ambiguous: detection.ambiguous } } : {}),
+      ...(rerankReport ? { rerank: rerankReport } : {}),
     },
   };
 }
@@ -613,7 +1155,7 @@ export async function findSimilar(
   opts: { limit?: number; minSim?: number; graph?: GraphId } = {},
 ): Promise<SimilarHit[]> {
   const { limit = 5, minSim = 0.92 } = opts;
-  const db = await lancedb.connect(INDEX_DIR);
+  const db = await lancedb.connect(indexDir());
   const table = await openTable(db);
   if (!table) return [];
 

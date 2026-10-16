@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { MemoryEntry } from "./schema.js";
-import { buildChainIndex, entryStatus, validateFollowsTargets } from "./chains.js";
+import { buildChainIndex, entryStatus, relationOf, validateFollowsTargets } from "./chains.js";
 
 function entry(partial: Partial<MemoryEntry> & Pick<MemoryEntry, "id" | "date" | "type">): MemoryEntry {
   return {
@@ -217,4 +217,75 @@ test("entries outside any chain are absent from the index", () => {
   ]);
   assert.equal(idx.has("2026-03-01-lonely"), false);
   assert.equal(idx.has("2026-01-01-a"), true);
+});
+
+// --- relations: supersedes vs extends -----------------------------------------
+
+test("relationOf: same type supersedes; closing an open type supersedes; anything else extends", () => {
+  assert.equal(relationOf("pending-decision", "decision"), "supersedes");
+  assert.equal(relationOf("todo", "note"), "supersedes");
+  assert.equal(relationOf("todo", "todo"), "supersedes");
+  assert.equal(relationOf("decision", "decision"), "supersedes");
+  assert.equal(relationOf("note", "note"), "supersedes");
+  assert.equal(relationOf("decision", "meeting"), "extends");
+  assert.equal(relationOf("note", "pending-decision"), "extends");
+  assert.equal(relationOf("pending-decision", "meeting"), "extends");
+  assert.equal(relationOf("incident", "decision"), "extends");
+});
+
+test("linear chain: the note is extended by the pending item, which is superseded by the decision", () => {
+  const idx = buildChainIndex([
+    entry({ id: "2026-01-01-note", date: "2026-01-01", type: "note" }),
+    entry({ id: "2026-02-01-pending", date: "2026-02-01", type: "pending-decision", follows: ["2026-01-01-note"] }),
+    entry({ id: "2026-03-01-decision", date: "2026-03-01", type: "decision", follows: ["2026-02-01-pending"] }),
+  ]);
+  const note = idx.get("2026-01-01-note")!;
+  assert.deepEqual(note.relations, { "2026-02-01-pending": "extends" });
+  assert.equal(note.superseded, false);
+  assert.equal(note.current.id, "2026-01-01-note");
+  assert.equal(note.latest.id, "2026-03-01-decision"); // component-wide latest is unchanged
+
+  const pending = idx.get("2026-02-01-pending")!;
+  assert.deepEqual(pending.relations, { "2026-01-01-note": "extends", "2026-03-01-decision": "supersedes" });
+  assert.equal(pending.superseded, true);
+  assert.equal(pending.current.id, "2026-03-01-decision");
+
+  const decision = idx.get("2026-03-01-decision")!;
+  assert.equal(decision.superseded, false);
+  assert.equal(decision.current.id, "2026-03-01-decision");
+});
+
+test("a meeting after a decision extends it: the decision stays current while latest moves on", () => {
+  const idx = buildChainIndex([
+    entry({ id: "2026-01-01-decision", date: "2026-01-01", type: "decision" }),
+    entry({ id: "2026-02-01-meeting", date: "2026-02-01", type: "meeting", follows: ["2026-01-01-decision"] }),
+  ]);
+  const d = idx.get("2026-01-01-decision")!;
+  assert.equal(d.superseded, false);
+  assert.equal(d.current.id, "2026-01-01-decision");
+  assert.equal(d.latest.id, "2026-02-01-meeting");
+});
+
+test("current follows supersedes edges transitively and picks the newest", () => {
+  const idx = buildChainIndex([
+    entry({ id: "2026-01-01-a", date: "2026-01-01", type: "note" }),
+    entry({ id: "2026-02-01-b", date: "2026-02-01", type: "note", follows: ["2026-01-01-a"] }),
+    entry({ id: "2026-03-01-c", date: "2026-03-01", type: "note", follows: ["2026-02-01-b"] }),
+    entry({ id: "2026-04-01-m", date: "2026-04-01", type: "meeting", follows: ["2026-03-01-c"] }),
+  ]);
+  assert.equal(idx.get("2026-01-01-a")!.current.id, "2026-03-01-c");
+  assert.equal(idx.get("2026-02-01-b")!.current.id, "2026-03-01-c");
+  assert.equal(idx.get("2026-03-01-c")!.superseded, false);
+  assert.equal(idx.get("2026-01-01-a")!.latest.id, "2026-04-01-m");
+});
+
+test("multi-parent decision supersedes every open predecessor", () => {
+  const idx = buildChainIndex([
+    entry({ id: "2026-01-01-p1", date: "2026-01-01", type: "pending-decision" }),
+    entry({ id: "2026-01-02-p2", date: "2026-01-02", type: "todo" }),
+    entry({ id: "2026-02-01-d", date: "2026-02-01", type: "decision", follows: ["2026-01-01-p1", "2026-01-02-p2"] }),
+  ]);
+  assert.equal(idx.get("2026-01-01-p1")!.superseded, true);
+  assert.equal(idx.get("2026-01-02-p2")!.superseded, true);
+  assert.equal(idx.get("2026-01-02-p2")!.current.id, "2026-02-01-d");
 });

@@ -46,11 +46,11 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
 | `rules list` / `rules apply [--dry-run]` | Standing per-tag/per-type distribution rules (`memory/graphs/rules.json`); apply reconciles them against existing default-graph entries — dry-run first |
 | `promote candidates --to <graph> [--since\|--until\|--limit]` | Default-graph entries awaiting promotion review for a graph (target REQUIRED; per-graph dismissals hidden until content changes; non-member-ref blockers flagged) |
 | `promote dismiss <id> --graph <g> [--reason "…"]` | Record a "not for that graph" decision — hidden from its candidates until the entry's content changes |
-| `index [--force]` | Re-sync index with Markdown (incremental; `--force` rebuilds) |
-| `query "<q>" ["<alt phrasing>" …] [--person|--type|--team|--tag|--since|--until|--graph|-k|--deep]` | Hybrid (semantic+lexical) search; pass 2–4 phrasings (all fused); `--deep` = recall-over-precision (k=40, wider pools); `--graph <name>` scopes to one graph's members (default: all, shared memberships labeled) |
-| `recall "<q>" ["<agent phrasing>" …] [filters] [--complete|--complete-if-small|--require-complete|--no-expand|--format json]` | Agent-facing recall with weighted query expansion, completeness reporting, and stable JSON output |
-| `list [filters] [--limit n]` | Structured browse, newest first |
-| `person <slug>` | Everything about a person |
+| `index [--force\|--reembed] [--rebuild] [--optimize]` / `index --build [<slot>] [--dry-run] [--force]` / `index --activate <slot\|previous>` / `index --prune [--confirm]` / `index slots` | Re-sync every built slot with Markdown (incremental; `--reembed` = `--force` re-embeds, `--rebuild` rebuilds the catalog/lexical tables reusing vectors, `--optimize` folds the lexical/vector indices and backfills header vectors) / build a complete new-format slot beside the current index (default name `next`, `main` on a fresh store; vectors reused by `(id, hash)`; never activates) / switch the active slot (rollback via `previous`; refuses a slot that is not built) / drop the non-active slots' derived artifacts, never the sidecars (plan only without `--confirm`) / slot status table |
+| `query "<q>" ["<alt phrasing>" …] [--person|--type|--team|--tag|--since|--until|--graph|-k|--deep|--index-slot <name>]` | Hybrid (semantic+lexical) search; pass 2–4 phrasings (all fused); `--deep` = recall-over-precision (k=40, wider pools); `--graph <name>` scopes to one graph's members (default: all, shared memberships labeled) |
+| `recall "<q>" ["<agent phrasing>" …] [filters] [--complete|--complete-if-small|--require-complete|--no-expand|--index-slot <name>|--format json]` | Agent-facing recall with weighted query expansion, completeness reporting, and stable JSON output (`index.slot` / `index.format` name the slot that answered) |
+| `list [filters] [--limit n] [--index-slot <name>]` | Structured browse, newest first |
+| `person <slug> [--index-slot <name>]` | Everything about a person |
 | `digest --person <slug> \| --quarter <YYYY-Qn> \| --tag <slug> [--graph <name>]` | Build/refresh a rolling summary (a shared-graph digest draws only on that graph's members and lands in its store) |
 | `maintenance [--threshold N]` | Hygiene report: digest debt (suggested `digest` commands), index health, connector validity, dangling links, similar-slug warnings |
 | `slugs list --kind person\|team\|tag [--min-count N]` | Slug vocabulary with usage counts (for tag compaction / slug reuse) |
@@ -110,8 +110,12 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   `pending-decision` → `decision`) is chained by setting `follows` on each later
   entry (`add --follows` at capture, `link` after the fact). Everything else is
   **derived at read time**: recall/query hits carry a `chain` annotation
-  (`latest`, `status: open|resolved`, `resolvedBy`) and print
-  `⤷ superseded by: <id>` on stale members; `list`/`person` mark open items
+  (`relations`, `superseded`, `current`, `latest`, `status: open|resolved`,
+  `resolvedBy`). A follower **supersedes** its predecessor when it is the same
+  type or closes an open item (decision/todo/note after a
+  pending-decision/todo); anything else **extends** it. Stale members print
+  `⤷ superseded by: <id>` (and rank lower, never hidden); still-current
+  members with later developments print `↳ extended by: <id>`. `list`/`person` mark open items
   `[open]` / `[resolved → <id>]`. Settle an open matter with a **new** linked
   entry — never by rewriting the old one. Removing a followed entry leaves a
   dangling link (tolerated; `maintenance` reports it). (`gmail`, `slack`,
@@ -128,27 +132,83 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   `add -A`, or `git -C memory commit` manually); template changes are committed
   to the main repo. Pull state (`last_pulled`) lives in
   `.index/connector-state.json`, not in the files.
+- **People profiles:** `memory/people/<slug>.md` (frontmatter only: `slug`,
+  optional `display_name`, `aliases[]`; PRIVATE store only, never scanned as
+  entries). Entries keep slugs; profiles let questions, `--person` and
+  `person <name>` resolve nicknames and display names (`memory people
+  alias|list|show`). A name already owned by another slug is refused — that is
+  a `slugs merge` question, not an alias.
 - **Summaries:** `memory/summaries/<id>.md` (`type: summary`) — an **additive**
   compaction layer with `sources:` back-links. They augment, never replace, raw
   entries. `digest` writes a scaffold; the agent refines the `## Synthesis`
   section into prose, then runs `index`.
-- **Index:** `.index/` — rebuildable derivatives, gitignored, never hand-edited:
-  the LanceDB vector table (rows carry `people`/`teams`/`tags` as pipe-delimited
-  strings so filters prefilter the vector search), `lexical.json` (persistent
-  stemmed BM25 postings), and `entries-cache.json` (parsed-entry cache keyed by
-  mtime/size). All self-invalidate on version/model change; `rm -rf .index` +
-  `memory index` regenerates everything from the Markdown.
+- **Index:** `.index/` — rebuildable derivatives, gitignored, never hand-edited.
+  The **root is the legacy slot**, unchanged in shape: the LanceDB `memory`
+  vector table (rows carry `people`/`teams`/`tags` as pipe-delimited strings so
+  filters prefilter the vector search), a `memory_headers` table (one
+  title+metadata vector per entry for the header leg — added beside the chunk
+  table so existing vectors are never re-embedded; new/changed entries get
+  theirs at sync, the rest are backfilled in bounded batches by
+  `index --optimize` and the weekly job; `maintenance` shows coverage),
+  `lexical.json` (persistent stemmed BM25 postings), and `entries-cache.json`
+  (parsed-entry cache keyed by mtime/size). All self-invalidate on version/model
+  change; `rm -rf .index` + `memory index` regenerates everything from the
+  Markdown.
+
+  **New-format slots** live beside it in `.index/slots/<name>/`: the same
+  `memory` + `memory_headers` tables plus an `entries` table (one row per entry:
+  metadata, a pre-tokenized `lex` column, `len`, `chunks`) and a `files` table,
+  with `meta.json {format: 2, …}` and `catalog-manifest.json`. `.index/active.json`
+  `{slot, previous}` names the active one; absent means the legacy root. A read
+  picks its slot by `--index-slot <name>` → `MEMORY_INDEX_SLOT` → `active.json`
+  → default, and refuses a new-format slot with no index built rather than
+  answering from nothing. The judgment sidecars (connector timestamps, the
+  promotion/chain/slug dismissals, slug proposals, `maintenance-state.json`,
+  `graph-maintenance.json`) stay at the root and are shared by every slot —
+  `index --prune` never touches them. Slots choose their lexical leg with
+  `MEMORY_LEXICAL=postings|fts` (`postings` by default and rank-identical to
+  the legacy slot; see `docs/eval/fts-spike.md`). Reads check the manifest
+  against per-directory mtimes and refresh when stale (`↻ catalog refreshed`);
+  `MEMORY_SYNC=strict` forces that scan.
 
   *Why LanceDB, and when to revisit (decided 2026-07-03):* the embedded
   LanceDB + BM25 + RRF stack **is** the RAG DB — no separate/hosted vector store
   is needed, and adding one would duplicate it while breaking the fully-local,
   zero-service property. Revisit only if: (a) multi-writer/multi-machine access
-  is needed; (b) the corpus nears ~10k+ entries and per-command load latency is
-  felt (fix: page `loadAllEntries()`, still no new DB); or (c) retrieval
+  is needed; (b) above ~2k entries, build the new-format slot
+  (`index --build next`): reads go through the catalog tables and its lexical
+  column, and bodies are read only for the hits. That is the READ path only:
+  the write path still parses every entry through `entries-cache.json`, and the
+  `files` table has no reader yet, so `add` keeps paying the whole-store parse
+  at any size. A scoped writer sync (`syncIndex({scope: {paths}})` reading the
+  `files` table to decide what changed) is the planned follow-up. Hand edits of
+  existing files are picked up by writer syncs, `memory index`, or
+  `MEMORY_SYNC=strict` —
+  directory mtimes alone do not see an in-place edit; or (c) retrieval
   *quality* degrades (fix: tune embedder/chunking/fusion first, not storage).
 - **Recall guarantees:** filtered `query` runs are exhaustive when the filter
   matches ≤200 entries (every match is ranked — nothing droppable before the
   k-cut); unfiltered runs use corpus-scaled candidate pools.
+- **Ranking is measured, not guessed:** the pure pipeline lives in
+  `src/ranking.ts` (tunables in `src/ranking-tunables.ts`, overridable per
+  process via `MEMORY_RANK_<NAME>`). Two profiles: `current` (default —
+  sharper RRF k0 20, a *floor* that puts a chain's current state just above a
+  retrieved stale member, one-hop spread over explicit links, a relative
+  score cutoff at 0.5 × top that `--no-cutoff` disables and exhaustive runs
+  never apply) and `legacy` (`MEMORY_RANK_PROFILE=legacy`, the pre-change
+  ordering bit-for-bit). Nothing is ever hidden or demoted below unrelated
+  entries; a blanket penalty on superseded entries was measured and rejected.
+  Opt-in extras: `--rerank` (a local cross-encoder second pass over the top
+  candidates; `MEMORY_RERANK=1` to default on) and the header leg
+  (`MEMORY_RANK_HEADER_LEG_WEIGHT`, title+metadata vectors — measured as a
+  trade-off that costs paraphrase recall, so off and its table dormant).
+  `npm run eval` scores a deterministic synthetic corpus (`src/eval-corpus.ts`,
+  cached under `.cache/eval/`) against the committed `docs/eval/baseline-4k.json`
+  — needles, near-duplicates, paraphrases, nickname aliases, follows chains,
+  filters, exact titles — and `memory eval run --compare` scores the real store
+  against the private golden set in `memory/eval/` (CLI-written only; see
+  MEMORY-GUARDRAILS.md). A ranking change ships only when the targeted case
+  family improves and nothing regresses beyond 0.01 on recall@10, MRR, nDCG@10.
 
 ## Rules
 

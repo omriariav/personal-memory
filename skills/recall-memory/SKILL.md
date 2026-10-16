@@ -70,26 +70,57 @@ candidate pools and `complete-if-small` (≤200 matching entries): when exhausti
 is true, **every** candidate entered consideration and nothing was silently
 dropped before the `-k` cut. Use `--complete` to force a complete scan,
 `--require-complete` when a non-exhaustive answer is unacceptable, and
-`--no-expand` only when the supplied phrases should be used exactly. Read the top
-cited entry file(s) in full, then answer with citations (file paths).
+`--no-expand` only when the supplied phrases should be used exactly. On
+non-exhaustive runs the long tail is trimmed at half the top score (the JSON
+report's `cutoff` field says how many were dropped); pass `--no-cutoff` when
+you want the full tail, e.g. when sweeping for anything loosely related. For a
+narrow, precision-sensitive lookup whose wording may differ from the entry's,
+add `--rerank`: a local cross-encoder re-scores the top candidates (1–2 s on
+CPU, one-time ~70 MB model download, nothing leaves the machine; the JSON
+report's `rerank` field records the model and cost). Read the top cited entry
+file(s) in full, then answer with citations (file paths).
 
 If a hit is a `summary` entry, its output includes a `sources:` line — pull the
-raw entries it cites when you need specifics behind the rollup.
+raw entries it cites when you need specifics behind the rollup. When a rollup
+and the raw entries it cites are both in the result, they point at each other:
+`⊕ covers: <ids>` under the summary, `⊕ digest: <summary-id>` under each raw
+hit (`digestOf` / `coveredBy` in JSON). Read the digest for the synthesis and
+the raw entries for specifics; neither replaces the other.
+
+**Names resolve through people profiles.** Write names the way the user says
+them: "Zhenya", "Jane Doe", or a slug all reach the same person once
+`memory/people/<slug>.md` lists the nickname (the JSON report's `entities`
+field shows what resolved; `ambiguous` lists names shared by two people — ask
+or pass `--person <slug>`). `--person` and `person <…>` accept a name or a
+close slug too. When the user refers to someone by a name recall cannot
+resolve, add it once:
+
+```bash
+npx tsx src/cli.ts people alias evgenia-ivanova --add "Zhenya"     # people list / people show <name> to look around
+```
 
 ### ⏱ Timeline annotations — never answer from a stale chain member
 
 Entries can be chained with `follows` links (note → pending-decision →
 decision). When a hit belongs to a chain, recall annotates it:
 
-- `⤷ superseded by: <id> (<type> · <date>)` — the matter developed after this
-  entry; **Read that latest entry before answering** and present IT as the
-  current state (cite both).
+- `⤷ superseded by: <id> (<type> · <date>)` — a later entry REPLACED this
+  one's state: the same type again (a newer decision after a decision), or a
+  decision/todo/note that closed an open `pending-decision`/`todo`. **Read
+  that entry before answering** and present IT as the current state (cite
+  both). Superseded members are ranked lower, never hidden — do not "correct"
+  the order by hand.
+- `↳ extended by: <id> (<type> · <date>)` — later developments were ADDED
+  without replacing this entry (a meeting after a decision, a pending item
+  raised from a note): this entry is still the state; cite both.
 - `status: open` / `status: resolved by <id>` — whether a
   `pending-decision`/`todo` was settled. Never report an item marked
   `resolved by <x>` as still open, and never present a superseded plan or
   pending decision as the current one.
 - In `--format json`, the same data is the `chain` field per hit
-  (`prev`/`next`/`latest`/`status`/`resolvedBy`) plus the raw `follows` ids.
+  (`prev`/`next`/`relations`/`superseded`/`current`/`latest`/`status`/
+  `resolvedBy`) plus the raw `follows` ids. `current` is the entry holding
+  the state now; `latest` is the newest member of the whole chain.
 
 **B. Synthesis / planning** ("how has Jane evolved?", "themes across this
 quarter?", "who's ready for promotion?", "prep for my staff meeting") →
@@ -142,7 +173,9 @@ by default**, fused into one ranking; shared memberships are labeled
 `--person <slug>` · `--type <type>` · `--team <slug>` · `--tag <slug>` ·
 `--since <YYYY-MM-DD>` · `--until <YYYY-MM-DD>` · `--graph <name>` ·
 `-k <n>` · `--complete` · `--complete-if-small` · `--require-complete` ·
-`--no-expand` · `--format json`
+`--no-expand` · `--format json` · `--index-slot <name>` (A/B a built slot
+before `index --activate`; the JSON report's `index.slot` says which one
+answered)
 
 ## Keeping recall sharp (compaction)
 
@@ -167,6 +200,28 @@ npx tsx src/cli.ts maintenance        # prints ready-to-run digest commands
 an id that no longer exists — so a broken chain is visible. Slug merge
 suggestions can be permanently ignored in the web UI's maintenance screen
 (ignore button).
+
+## Golden set — turn confirmed answers into regression tests
+
+Ranking changes are gated by measurement. The private golden set
+(`memory/eval/golden.json`, versioned by the nested repo, never leaves the
+machine) holds real questions with the entry the user confirmed as the answer.
+When a recall session ends with the user confirming which cited entry was
+right, offer one line — never save automatically, the expected id is a human
+judgment:
+
+```bash
+npx tsx src/cli.ts eval add-golden "<the user's exact question>" "<phrasing you used>" --expect <confirmed-id>
+# a known follows chain: assert the latest state outranks the stale one
+npx tsx src/cli.ts eval add-golden "where did we land on X" --expect <latest-id> --must-outrank <latest-id>:<superseded-id>
+```
+
+`add-golden` validates the ids, runs the case once so the current rank is
+visible, and checkpoints `memory/.git`. `eval run --compare` scores the live
+store against `memory/eval/baseline.json` (`--save-baseline` records it) and
+exits 2 on regression; `eval list` shows each case with its last result. Never
+write `memory/eval/` by hand and never copy its contents into `docs/` — real
+titles and ids belong only in the private store.
 
 ## Principles
 

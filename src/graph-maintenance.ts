@@ -2,11 +2,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { relative, join } from "node:path";
 import matter from "gray-matter";
 import { DEFAULT_GRAPH, FrontmatterSchema, sortGraphs, type Frontmatter, type GraphId, type MemoryEntry } from "./schema.js";
-import { INDEX_DIR, ROOT, loadAllEntries, writeEntryAll } from "./ingest.js";
+import { INDEX_DIR, ROOT, writeEntryAll } from "./ingest.js";
 import { storeFor, validateContainment } from "./graphs.js";
-import { syncIndex } from "./store.js";
+import type { CatalogEntryMeta } from "./catalog.js";
+import { requireEntry } from "./membership.js";
+import { openCatalogForWrite, syncIndex } from "./store.js";
 import { commitMemoryRepo } from "./memory-git.js";
-import { validateFollowsTargets } from "./chains.js";
+import { chainAncestry, validateFollowsTargets } from "./chains.js";
 
 export const GRAPH_MAINTENANCE_PATH = join(INDEX_DIR, "graph-maintenance.json");
 
@@ -76,7 +78,10 @@ interface SlugStats {
   entryIds: Set<string>;
 }
 
-function countByKind(entries: MemoryEntry[], kind: SlugKind): Map<string, SlugStats> {
+/** The slice of an entry slug accounting needs — a catalog meta satisfies it. */
+export type SlugSource = Pick<MemoryEntry, "id" | "date" | "people" | "teams" | "tags">;
+
+function countByKind(entries: SlugSource[], kind: SlugKind): Map<string, SlugStats> {
   const field = FIELD_BY_KIND[kind];
   const stats = new Map<string, SlugStats>();
   for (const entry of entries) {
@@ -100,7 +105,7 @@ export interface SlugUsage {
   lastSeen: string | null;
 }
 
-export function slugUsage(entries: MemoryEntry[], kind: SlugKind): SlugUsage[] {
+export function slugUsage(entries: SlugSource[], kind: SlugKind): SlugUsage[] {
   return [...countByKind(entries, kind).values()]
     .map(({ slug, count, lastSeen }) => ({ slug, count, lastSeen }))
     .sort((a, b) => b.count - a.count || a.slug.localeCompare(b.slug));
@@ -128,7 +133,7 @@ function editDistance(a: string, b: string): number {
   return dp[a.length]![b.length]!;
 }
 
-function similarity(a: string, b: string): number {
+export function similarity(a: string, b: string): number {
   return 1 - editDistance(a, b) / Math.max(a.length, b.length, 1);
 }
 
@@ -219,7 +224,7 @@ function pairSuggestion(kind: SlugKind, a: SlugStats, b: SlugStats): SlugSuggest
 const AGENT_PROPOSAL_CONFIDENCE = 0.9;
 
 export function analyzeGraphHygiene(
-  entries: MemoryEntry[],
+  entries: SlugSource[],
   generatedAt = new Date().toISOString(),
   dismissed: Set<string> = new Set(),
   proposals: SlugProposal[] = [],
@@ -350,8 +355,7 @@ export async function readSlugProposals(): Promise<SlugProposal[]> {
  */
 export async function proposeSlugMerge(kind: SlugKind, from: string, to: string, reason: string): Promise<GraphMaintenanceAudit> {
   if (from === to) throw new Error("--from and --to must be different slugs");
-  const entries = await loadAllEntries();
-  const stats = countByKind(entries, kind);
+  const stats = countByKind(await (await openCatalogForWrite()).all(), kind);
   for (const slug of [from, to]) {
     if (!stats.has(slug)) throw new Error(`${kind} '${slug}' does not exist — proposals must reference existing slugs`);
   }
@@ -388,12 +392,15 @@ export async function applyChainLink(opts: {
   follows: string[];
   refreshAudit?: boolean;
 }): Promise<ChainLinkResult> {
-  const entries = await loadAllEntries();
-  const entry = entries.find((e) => e.id === opts.laterId);
-  if (!entry) throw new Error(`no entry with id '${opts.laterId}'`);
-  validateFollowsTargets(entries, entry, opts.follows);
+  const catalog = await openCatalogForWrite();
+  const entry = await requireEntry(catalog, opts.laterId);
+  // The cycle check walks each target's ancestry, so only the chain around the
+  // new links has to be loaded — not the corpus.
+  const ancestry = await chainAncestry((ids) => catalog.byIds(ids), opts.follows);
+  validateFollowsTargets([entry, ...ancestry], entry, opts.follows);
   // A shared-graph member must never gain a link outside its graphs.
-  validateContainment(new Map(entries.map((e) => [e.id, e])), entry, opts.follows);
+  const targets = await catalog.byIds(opts.follows);
+  validateContainment(new Map(targets.map((t) => [t.id, t])), entry, opts.follows);
 
   const mergedFollows = [...new Set([...(entry.follows ?? []), ...opts.follows])];
   if (mergedFollows.length === (entry.follows ?? []).length) {
@@ -445,7 +452,7 @@ export async function readGraphMaintenanceAudit(): Promise<GraphMaintenanceAudit
 }
 
 export async function refreshGraphMaintenanceAudit(): Promise<GraphMaintenanceAudit> {
-  const entries = await loadAllEntries();
+  const entries = await (await openCatalogForWrite()).all();
   const audit = analyzeGraphHygiene(entries, undefined, slugDismissalKeys(await readSlugDismissals()), await readSlugProposals());
   await writeGraphMaintenanceAudit(audit);
   return audit;
@@ -455,16 +462,19 @@ function rel(path: string): string {
   return relative(ROOT, path);
 }
 
-function previewSlugMerge(entries: MemoryEntry[], kind: SlugKind, from: string, to: string, createTarget: boolean): SlugMergePreview {
+function previewSlugMerge(entries: CatalogEntryMeta[], kind: SlugKind, from: string, to: string, createTarget: boolean): SlugMergePreview {
   if (from === to) throw new Error("--from and --to must be different slugs");
   const field = FIELD_BY_KIND[kind];
   const targetExists = entries.some((e) => e[field].includes(to));
   if (!targetExists && !createTarget) {
     throw new Error(`target '${to}' does not exist for ${kind}s; pass --create-target to allow it`);
   }
+  // Newest first, id as the tie-break: without it same-day entries keep the
+  // catalog's order, which is table order on a new-format slot and corpus
+  // order on the legacy one — the printed preview would differ per slot.
   const affected = entries
     .filter((e) => e[field].includes(from))
-    .sort((a, b) => b.date.localeCompare(a.date));
+    .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
   return {
     kind,
     from,
@@ -474,7 +484,7 @@ function previewSlugMerge(entries: MemoryEntry[], kind: SlugKind, from: string, 
   };
 }
 
-async function writeFrontmatterMerge(entry: MemoryEntry, kind: SlugKind, from: string, to: string): Promise<void> {
+async function writeFrontmatterMerge(entry: Pick<MemoryEntry, "path" | "paths">, kind: SlugKind, from: string, to: string): Promise<void> {
   // Rewrite EVERY materialization identically — inputs are byte-identical
   // copies, so identical rewrites preserve the copy-sync invariant.
   const raw = await readFile(entry.path, "utf8");
@@ -498,8 +508,11 @@ export async function mergeSlugs(opts: {
   createTarget?: boolean;
   refreshAudit?: boolean;
 }): Promise<SlugMergeResult> {
-  const entries = await loadAllEntries();
-  const preview = previewSlugMerge(entries, opts.kind, opts.from, opts.to, Boolean(opts.createTarget));
+  const catalog = await openCatalogForWrite();
+  // The whole vocabulary, not just the `from` matches: the target-exists check
+  // has to see every entry carrying `to`.
+  const metas = await catalog.all();
+  const preview = previewSlugMerge(metas, opts.kind, opts.from, opts.to, Boolean(opts.createTarget));
   if (opts.dryRun) {
     return { ...preview, dryRun: true, beforeCommit: false, afterCommit: false };
   }
@@ -508,7 +521,7 @@ export async function mergeSlugs(opts: {
   }
 
   const affectedIds = new Set(preview.entries.map((e) => e.id));
-  const affected = entries.filter((e) => affectedIds.has(e.id));
+  const affected = metas.filter((e) => affectedIds.has(e.id));
   // A merge can touch entries across MANY stores — checkpoint and commit each
   // affected store so every side has its own undo point.
   const affectedGraphs = sortGraphs(affected.flatMap((e) => e.graphs)) as GraphId[];

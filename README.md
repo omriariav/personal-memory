@@ -119,8 +119,11 @@ Track a matter over time:
 
 When a memory develops or settles an earlier one, the agent links them with a
 `follows` chain. Recall then annotates any stale chain member with the entry
-that superseded it, and open pending decisions and todos report whether they
-were resolved — so an old snapshot can never masquerade as the current state.
+that superseded it (a same-type successor, or a decision that closed an open
+item) and ranks it lower; a member that was merely extended (a meeting after a
+decision) stays current and points at the later developments. Open pending
+decisions and todos report whether they were resolved — so an old snapshot can
+never masquerade as the current state.
 
 Agents should retrieve through the local memory CLI, write through `memory add`,
 and cite the memory files they used. The full agent contract is in
@@ -221,8 +224,10 @@ organizes the durable content into graphs:
   every shared store is self-contained — its entries never reference
   non-members.
 - `memory/summaries/<id>.md` stores additive summaries created by `digest`.
-- `.index/` stores rebuildable local search artifacts (both graphs, with a
-  `graph` column).
+- `.index/` stores rebuildable local search artifacts: the legacy index at the
+  root plus optional new-format slots under `.index/slots/<name>/`
+  (`memory index slots`); user judgment such as connector timestamps and
+  dismissals lives in root sidecars that every slot shares.
 - `connectors/<name>.md` stores public connector templates.
 - `memory/connectors/<name>.md` stores private connector overrides.
 
@@ -247,7 +252,8 @@ or settles, forming a chain per evolving matter. Everything else is derived at
 read time — nothing to keep in sync:
 
 - Recall and query hits carry the chain context: stale members are annotated
-  with `⤷ superseded by: <id>`, and pending decisions and todos report
+  with `⤷ superseded by: <id>`, still-current members with later additions
+  with `↳ extended by: <id>`, and pending decisions and todos report
   `status: open` or `status: resolved by <id>` (also in `--format json`).
 - Ranking gets a mild recency boost (at most +2%, decaying over ~3 months), so
   newer entries win near-ties without burying strong older matches.
@@ -271,7 +277,8 @@ The index combines:
 Rebuild the index at any time:
 
 ```bash
-rm -rf .index
+npm run memory -- index --rebuild   # rebuild every built slot's catalog/lexical tables, vectors reused
+rm -rf .index                       # full reset: drops the vectors and the root sidecars too
 npm run index -- --force
 ```
 
@@ -315,9 +322,14 @@ of requiring users to assemble a new upgrade sequence for every release.
 
 The backup includes the complete graph-store layout: `memory/`, the legacy
 `memory-public/` store when present, and every named graph under
-`memory-graphs/`. It also preserves connector timestamps, promotion/chain/slug
-dismissals, and deferred slug proposals from `.index/`; search tables and
-caches remain rebuildable. Validate or restore one of those archives with:
+`memory-graphs/`. It also preserves the `.index/` files no rebuild can
+recreate: connector timestamps, promotion/chain/slug dismissals, deferred slug
+proposals, `maintenance-state.json`, `graph-maintenance.json`, and the
+`active.json` that names the active index slot; search tables and caches
+remain rebuildable. A restored `active.json` naming a slot that was not in the
+archive falls back to the legacy root index with a warning until
+`npx tsx src/cli.ts index --build <slot>` rebuilds it. Validate or restore one
+of those archives with:
 
 ```bash
 ./scripts/restore_backup.sh ../personal-memory-backups/personal-memory-<timestamp>.tgz --dry-run
@@ -357,6 +369,44 @@ eligibility criteria live in each graph's `GRAPH.md`. Marketplace/plugin
 users: update the clone `MEMORY_HOME` points at before using the new
 `graphs`/`copy`/`rules` commands.
 
+### Switching to the next-format index (optional)
+
+Stores above ~2,000 entries benefit from the new-format index: metadata and a
+pre-tokenized lexical column live in catalog tables, so a command filters and
+ranks without re-parsing every file and reads bodies only for its hits. It is
+never built in place and never forced — an existing store keeps reading its
+legacy index until you activate a slot:
+
+```bash
+npx tsx src/cli.ts index --build next            # complete second index beside the current one; existing vectors reused, nothing re-embedded
+npx tsx src/cli.ts recall "…" --index-slot next  # try it (MEMORY_INDEX_SLOT=next does the same for every command)
+npx tsx src/cli.ts index slots                   # what exists, and which slot is active
+npx tsx src/cli.ts index --activate next         # switch; the old index stays as 'previous'
+npx tsx src/cli.ts index --activate previous     # roll back any time
+npx tsx src/cli.ts index --prune --confirm       # once satisfied: drop the non-active slots' derived artifacts
+```
+
+The gain is on the READ path. Writers still parse every entry through the
+root parse cache, and the `files` table has no reader yet, so `add` costs the
+same on a new-format slot as on the legacy one; a scoped writer sync that
+reads that table to decide what changed is the planned follow-up.
+
+Writers (`add`, `copy`/`move`/`remove`/`link`, slug merges) keep every built
+slot in sync, so `next` never goes stale while you compare. Reads refuse a
+new-format slot that has no index yet rather than answering from nothing;
+`npx tsx src/cli.ts index` builds it. `--prune` never touches the judgment
+sidecars at the `.index/` root, and refuses the active slot.
+`./scripts/migrate.sh --build-next-index` builds the slot as part of a
+backup-first upgrade and never activates it. `memory maintenance` lists the
+slots and prints a one-line hint when the store is large and only the legacy
+index exists. Fresh stores (no `.index/` yet) skip all of this and build the
+new format directly as slot `main`.
+
+New-format slots score their lexical leg exactly like the legacy index by
+default. `MEMORY_LEXICAL=fts` swaps in LanceDB's full-text index, which is
+faster but not yet rank-identical — the measurements and the decision are in
+[docs/eval/fts-spike.md](docs/eval/fts-spike.md).
+
 ## Privacy
 
 The default setup is intentionally local:
@@ -377,6 +427,10 @@ Optional remote embedding backends can be enabled deliberately:
 MEMORY_EMBEDDINGS=openai npm run index -- --force
 MEMORY_EMBEDDINGS=voyage npm run index -- --force
 ```
+
+Indexing embeds text in batches of 64 — one model call or API request per
+batch (set `MEMORY_EMBED_BATCH=<n>` to change it) — so peak memory stays
+bounded as the store grows.
 
 Do not publish a populated `memory/` directory or screenshots containing private
 names, events, or relationships unless you have intentionally sanitized them.

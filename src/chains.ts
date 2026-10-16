@@ -6,11 +6,29 @@ import type { MemoryEntry, MemoryType } from "./schema.js";
  * Everything here is computed at read time from the Markdown source of truth —
  * nothing is persisted, so it can never drift.
  */
+export type ChainRelation = "supersedes" | "extends";
+
+/** The slice of an entry the chain index needs — catalogs supply this without bodies. */
+export type ChainSource = Pick<MemoryEntry, "id" | "type" | "date" | "updated" | "follows">;
+
 export interface ChainAnnotation {
   /** Valid `follows` targets of this entry (dangling ids filtered out). */
   prev: string[];
   /** Entries that declare this one in their `follows` (derived reverse links). */
   next: string[];
+  /**
+   * Per neighbour (prev or next): whether the LATER of the two replaces the
+   * earlier one's state (`supersedes`) or only adds to it (`extends`).
+   * Derived from types — see `relationOf`.
+   */
+  relations: Record<string, ChainRelation>;
+  /** True when some follower supersedes this entry: its state is stale. */
+  superseded: boolean;
+  /**
+   * The entry that now holds this matter's state: the newest reachable over
+   * `supersedes` edges only; the entry itself when nothing supersedes it.
+   */
+  current: { id: string; type: MemoryType; date: string };
   /** The most current member of the whole chain, by max(date, updated). */
   latest: { id: string; type: MemoryType; date: string };
   /**
@@ -26,8 +44,24 @@ export interface ChainAnnotation {
 
 const OPEN_TYPES: ReadonlySet<MemoryType> = new Set(["pending-decision", "todo"]);
 
+/** Types whose follower settles an open item (`pending-decision` / `todo`). */
+const CLOSING_TYPES: ReadonlySet<MemoryType> = new Set(["decision", "todo", "note"]);
+
+/**
+ * A follower SUPERSEDES its predecessor when it is the same type (a newer
+ * decision replaces a decision, a newer note a note) or when it closes an
+ * open type (a decision/todo/note after a pending-decision or todo). Anything
+ * else — a meeting after a decision, a pending item raised from a note —
+ * EXTENDS: the earlier entry is still the state, developments were added.
+ */
+export function relationOf(predecessor: MemoryType, follower: MemoryType): ChainRelation {
+  if (follower === predecessor) return "supersedes";
+  if (OPEN_TYPES.has(predecessor) && CLOSING_TYPES.has(follower)) return "supersedes";
+  return "extends";
+}
+
 /** The date an entry last "spoke": `updated` when newer than `date`. */
-function refDate(e: MemoryEntry): string {
+function refDate(e: Pick<MemoryEntry, "date" | "updated">): string {
   return e.updated && e.updated > e.date ? e.updated : e.date;
 }
 
@@ -57,7 +91,7 @@ function descendants(id: string, next: Map<string, string[]>): string[] {
  * an UNLINKED pending-decision/todo is simply open. Non-open types have none.
  */
 export function entryStatus(
-  e: MemoryEntry,
+  e: Pick<MemoryEntry, "id" | "type">,
   index: Map<string, ChainAnnotation>,
 ): { status: "open" | "resolved"; resolvedBy?: string } | undefined {
   if (!OPEN_TYPES.has(e.type)) return undefined;
@@ -68,14 +102,18 @@ export function entryStatus(
     : { status: "open" };
 }
 
+/** The slice of an entry the `follows` guards read — a catalog meta satisfies it. */
+export type FollowsSource = Pick<MemoryEntry, "id" | "date" | "follows">;
+
 /**
  * Write-time guard for new `follows` links: every target must exist, be no
  * newer than the follower, not be the follower itself, and not already follow
  * the follower (directly or transitively) — so the CLI can never create a
  * cycle. `source` may be an entry that does not exist yet (a fresh capture).
+ * `entries` must cover each target's ancestry (see `chainAncestry`).
  */
 export function validateFollowsTargets(
-  entries: MemoryEntry[],
+  entries: FollowsSource[],
   source: { id: string; date: string },
   targets: string[],
 ): void {
@@ -108,12 +146,32 @@ export function validateFollowsTargets(
 }
 
 /**
+ * Transitive `follows` ancestry of `ids` (the ids themselves included),
+ * fetched in BFS batches through `lookup` — the catalog-backed input
+ * `validateFollowsTargets` needs when the whole corpus is not in memory.
+ * Cycle-safe: an id is looked up at most once.
+ */
+export async function chainAncestry(
+  lookup: (ids: string[]) => Promise<FollowsSource[]>,
+  ids: string[],
+): Promise<FollowsSource[]> {
+  const seen = new Map<string, FollowsSource>();
+  let frontier = [...new Set(ids)];
+  while (frontier.length) {
+    const batch = await lookup(frontier.filter((id) => !seen.has(id)));
+    for (const e of batch) seen.set(e.id, e);
+    frontier = [...new Set(batch.flatMap((e) => e.follows ?? []))].filter((id) => !seen.has(id));
+  }
+  return [...seen.values()];
+}
+
+/**
  * Build the chain index: only entries participating in a chain (linking,
  * linked-to, or carrying dangling links) get an annotation; everything else is
  * absent. O(component) per entry — trivial at this corpus size.
  */
-export function buildChainIndex(entries: MemoryEntry[]): Map<string, ChainAnnotation> {
-  const byId = new Map(entries.map((e) => [e.id, e] as const));
+export function buildChainIndex(entries: ChainSource[]): Map<string, ChainAnnotation> {
+  const byId: Map<string, ChainSource> = new Map(entries.map((e) => [e.id, e] as const));
   const prev = new Map<string, string[]>();
   const next = new Map<string, string[]>();
   const dangling = new Map<string, string[]>();
@@ -161,12 +219,29 @@ export function buildChainIndex(entries: MemoryEntry[]): Map<string, ChainAnnota
     for (const id of component) latestOf.set(id, latest);
   }
 
+  // Reverse links restricted to superseding followers: `current` walks these.
+  const supersedingNext = new Map<string, string[]>();
+  for (const [target, followers] of next) {
+    const t = byId.get(target)!;
+    for (const f of followers) {
+      if (relationOf(t.type, byId.get(f)!.type) === "supersedes") push(supersedingNext, target, f);
+    }
+  }
+
   for (const id of members) {
     const e = byId.get(id)!;
     const latestEntry = byId.get(latestOf.get(id)!)!;
+    const relations: Record<string, ChainRelation> = {};
+    for (const p of prev.get(id) ?? []) relations[p] = relationOf(byId.get(p)!.type, e.type);
+    for (const n of next.get(id) ?? []) relations[n] = relationOf(e.type, byId.get(n)!.type);
+    const replacements = descendants(id, supersedingNext);
+    const currentEntry = byId.get(replacements.length ? replacements.reduce(newer) : id)!;
     const annotation: ChainAnnotation = {
       prev: prev.get(id) ?? [],
       next: next.get(id) ?? [],
+      relations,
+      superseded: replacements.length > 0,
+      current: { id: currentEntry.id, type: currentEntry.type, date: currentEntry.date },
       latest: { id: latestEntry.id, type: latestEntry.type, date: latestEntry.date },
     };
     const danglingIds = dangling.get(id);

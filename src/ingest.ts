@@ -59,17 +59,8 @@ export function normalizeSourceId(raw: string): string {
       `invalid source id '${raw}' — expected '<scheme>:<rest>', e.g. slack:C123:1700000000.1 or gmail:<thread-id>`,
     );
   }
+  if (s.includes("|")) throw new Error(`invalid source id '${raw}' — must not contain '|'`);
   return `${s.slice(0, i).toLowerCase()}:${s.slice(i + 1)}`;
-}
-
-/** First entry whose source_ids intersect any of `ids` (the dedup anchor). */
-export function findEntryBySourceIds(
-  entries: MemoryEntry[],
-  ids: string[],
-): MemoryEntry | undefined {
-  if (ids.length === 0) return undefined;
-  const want = new Set(ids);
-  return entries.find((e) => (e.source_ids ?? []).some((s) => want.has(s)));
 }
 
 /** Recursively list all .md files under a directory. */
@@ -137,6 +128,19 @@ async function readEntryCache(): Promise<EntryCache> {
     // missing or corrupt — rebuild from scratch below
   }
   return { version: ENTRY_CACHE_VERSION, files: {} };
+}
+
+/**
+ * Whether any store holds at least one entry file. A directory listing only —
+ * nothing is parsed and no cache is written — so a read path can tell "this
+ * store is empty" apart from "this store has entries but no index yet".
+ */
+export async function hasAnyEntryFile(): Promise<boolean> {
+  for (const store of listGraphStores()) {
+    if ((await listMarkdown(store.entriesDir)).length > 0) return true;
+    if ((await listMarkdown(store.summariesDir)).length > 0) return true;
+  }
+  return false;
 }
 
 /** Load every materialization across all registered stores, via the parse cache. */
@@ -266,9 +270,27 @@ export function entryMetadataText(e: MemoryEntry): string {
   return lines.filter((line) => !line.endsWith(": ")).join("\n");
 }
 
+/**
+ * How many times the title is repeated in the lexical text (BM25 has no
+ * field weighting). 1 = the established text; the evaluation harness sets
+ * MEMORY_LEXICAL_TITLE_REPEAT to measure alternatives. Recorded in the
+ * lexical index file so a change triggers an in-process rebuild.
+ */
+export const LEXICAL_TITLE_REPEAT = Math.max(1, Math.floor(Number(process.env.MEMORY_LEXICAL_TITLE_REPEAT ?? 1)) || 1);
+
 /** Full text used by the lexical index. */
-export function entrySearchText(e: MemoryEntry): string {
-  return `${entryMetadataText(e)}\n\nbody:\n${e.body}`.trim();
+export function entrySearchText(e: MemoryEntry, titleRepeat: number = LEXICAL_TITLE_REPEAT): string {
+  const extraTitles = titleRepeat > 1 ? `${Array(titleRepeat - 1).fill(`title: ${e.title}`).join("\n")}\n` : "";
+  return `${extraTitles}${entryMetadataText(e)}\n\nbody:\n${e.body}`.trim();
+}
+
+/**
+ * Title + metadata only — the text behind the header leg's per-entry vector,
+ * so a short, title-like question matches the entry it names instead of
+ * being diluted by a long body.
+ */
+export function headerText(e: MemoryEntry): string {
+  return `# ${e.title}\n\n${entryMetadataText(e)}`;
 }
 
 /**

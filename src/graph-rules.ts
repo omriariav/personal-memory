@@ -2,9 +2,10 @@ import { readFile, mkdir, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { MEMORY_TYPES, DEFAULT_GRAPH, type MemoryEntry } from "./schema.js";
-import { MEMORY_DIR, loadAllEntries } from "./ingest.js";
+import { MEMORY_DIR } from "./ingest.js";
 import { requireGraph } from "./graphs.js";
 import { copyEntry, moveEntry } from "./membership.js";
+import { openCatalog } from "./catalog.js";
 
 /**
  * Standing distribution rules: "entries matching TAG and/or TYPE belong in
@@ -98,7 +99,10 @@ export interface RulesPlan {
  * Copy rules union (idempotent: already-member targets are no-ops and drop
  * out of the plan).
  */
-export function planRules(entries: MemoryEntry[], rules: GraphRule[]): RulesPlan {
+export function planRules(
+  entries: Pick<MemoryEntry, "id" | "tags" | "type" | "graphs">[],
+  rules: GraphRule[],
+): RulesPlan {
   const actions: PlannedAction[] = [];
   const conflicts: RulesPlan["conflicts"] = [];
   for (const e of entries) {
@@ -152,7 +156,7 @@ export async function applyRules(
     plan: { actions: [], conflicts: [] },
   };
   if (rules.length === 0) return report;
-  let entries = await loadAllEntries();
+  let entries: Pick<MemoryEntry, "id" | "tags" | "type" | "graphs">[] = await (await openCatalog()).all();
   if (opts.ids) entries = entries.filter((e) => opts.ids!.includes(e.id));
   report.plan = planRules(entries, rules);
   report.skippedConflicts = report.plan.conflicts.length;

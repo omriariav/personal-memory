@@ -40,8 +40,12 @@ index files, and the entry paths that CLI output cites.
      `--follows <pending-id>` so the timeline is preserved (see below).
    - `date` — ISO `YYYY-MM-DD`; default to today if not stated.
    - `people` — kebab-case slugs (e.g. `jane-doe`). **Reuse existing slugs** — run
-     `memory list` or check `memory/people/` first so the same person always maps
-     to the same slug.
+     `memory people show "<name as the user said it>"` (resolves nicknames,
+     display names and near-miss slugs through `memory/people/`) or `memory
+     people list` so the same person always maps to the same slug. When the
+     user calls someone by a name recall can't resolve yet, record it once:
+     `memory people alias <slug> --add "<name>"` (frontmatter-only profile in
+     the private store; never a second slug for a known person).
    - `teams`, `tags` — kebab-case slugs (optional but valuable for recall).
 2. **Write a clear body**: what happened, context, decisions, and follow-ups /
    action items. Be concrete (names, numbers, dates) — future recall quality
@@ -97,7 +101,9 @@ the latest state instead of a stale one:
 - The CLI validates targets (must exist, not be newer, no cycles) and derives
   everything else at read time: an unresolved `pending-decision`/`todo` shows as
   `[open]`, a chained one as `[resolved → <id>]`, and recall annotates stale
-  chain members with `⤷ superseded by: <latest-id>`.
+  chain members with `⤷ superseded by: <id>` (same-type successor, or a
+  decision/todo/note closing an open item) and still-current ones with
+  `↳ extended by: <id>` (e.g. a meeting after a decision).
 - Don't confuse this with `--update`: same evolving *source thread* → update in
   place; a **new development of a matter** → new entry + `--follows`.
 

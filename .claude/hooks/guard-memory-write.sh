@@ -10,7 +10,9 @@
 # Allowed and untouched by this guard: every store's summaries/ (Synthesis
 # prose after `digest`), memory/connectors/ + memory/routing/ + memory/graphs/
 # (private config overrides). Every store's entries/ is protected: memory/
-# (private graph) and memory-graphs/<name>/ (each named shared graph).
+# (private graph) and memory-graphs/<name>/ (each named shared graph), as is
+# memory/eval/ (the golden set — written only by `cli.ts eval …`, which
+# validates ids and checkpoints the nested repo).
 
 input="$(cat)"
 
@@ -59,7 +61,7 @@ case "$tool" in
     # Extraction failed outright → match the raw payload rather than allowing.
     [ -n "$file_path" ] || file_path="$input"
     case "$file_path" in
-      *memory/entries/*|*memory-public/entries/*|*memory-graphs/*/entries/*|*.index/*) deny ;;
+      *memory/entries/*|*memory-public/entries/*|*memory-graphs/*/entries/*|*.index/*|*memory/eval/*) deny ;;
     esac
     ;;
   Bash)
@@ -69,7 +71,7 @@ case "$tool" in
     # write (redirect/copy/move/delete/in-place edit). Plain reads pass, and
     # `cli.ts add` never mentions memory/entries at all.
     case "$cmd" in
-      *memory/entries*|*memory-public/entries*|*memory-graphs/*/entries*|*.index/*)
+      *memory/entries*|*memory-public/entries*|*memory-graphs/*/entries*|*.index/*|*memory/eval/*)
         case "$cmd" in
           *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'touch '*|*'truncate '*|*'dd '*) deny ;;
         esac

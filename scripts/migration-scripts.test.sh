@@ -341,7 +341,47 @@ test_restore_rejects_symlink_archive() {
   pass "restore rejects symlinks before extraction"
 }
 
-printf '1..13\n'
+test_migrate_build_next_index_builds_without_activating() {
+  local fixture="$TEST_ROOT/migrate-build-next"
+  local repo="$fixture/repo"
+  init_migrate_fixture "$fixture"
+  write_file "$repo/memory/record.txt" "default graph"
+  write_file "$repo/.index/active.json" '{"slot":"legacy"}'
+  write_file "$repo/.index/maintenance-state.json" '{"status":"success"}'
+
+  MIGRATION_NPX_LOG="$fixture/npx.log" PATH="$fixture/bin:$ORIGINAL_PATH" \
+    "$BASH_BIN" "$repo/scripts/migrate.sh" --no-update --skip-install --build-next-index --backup-dir "$fixture/backups" \
+    > "$fixture/output" 2>&1
+
+  assert_file_contains "$fixture/npx.log" "tsx src/cli.ts index --build next"
+  case "$(<"$fixture/npx.log")" in
+    *"--activate"*) fail "migration must never activate a slot" ;;
+  esac
+  assert_file_contains "$fixture/output" "Building the next-format index slot"
+  local archives
+  archives=("$fixture"/backups/personal-memory-*.tgz)
+  local contents
+  contents="$(tar -tzf "${archives[0]}")"
+  case "$contents" in *".index/active.json"*) ;; *) fail "active.json missing from the durable backup" ;; esac
+  case "$contents" in *".index/maintenance-state.json"*) ;; *) fail "maintenance-state.json missing from the durable backup" ;; esac
+  pass "migration --build-next-index builds the next slot, never activates, and backs up the new durable files"
+}
+
+test_migrate_without_flag_does_not_build() {
+  local fixture="$TEST_ROOT/migrate-no-build"
+  local repo="$fixture/repo"
+  init_migrate_fixture "$fixture"
+  write_file "$repo/memory/record.txt" "default graph"
+  MIGRATION_NPX_LOG="$fixture/npx.log" PATH="$fixture/bin:$ORIGINAL_PATH" \
+    "$BASH_BIN" "$repo/scripts/migrate.sh" --no-update --skip-install --backup-dir "$fixture/backups" \
+    > "$fixture/output" 2>&1
+  case "$(<"$fixture/npx.log")" in
+    *"index --build"*) fail "migration built a slot without --build-next-index" ;;
+  esac
+  pass "migration without --build-next-index leaves the index alone"
+}
+
+printf '1..15\n'
 test_migrate_backup_includes_all_stores_and_state
 test_migrate_rejects_dirty_tracked_tree
 test_migrate_rejects_physical_backup_path_inside_repo
@@ -355,3 +395,5 @@ test_restore_preserves_current_state_for_legacy_archive_format
 test_restore_rolls_back_stores_and_complete_index_on_failure
 test_restore_rejects_physical_backup_path_inside_repo
 test_restore_rejects_symlink_archive
+test_migrate_build_next_index_builds_without_activating
+test_migrate_without_flag_does_not_build

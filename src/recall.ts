@@ -3,72 +3,36 @@ import { ROOT } from "./ingest.js";
 import {
   DEFAULT_COMPLETE_LIMIT,
   searchDetailed,
-  type QueryOrigin,
   type QuerySpec,
   type SearchCompleteness,
   type SearchFilters,
+  type SearchOptions,
 } from "./store.js";
 import type { MemoryEntry } from "./schema.js";
 import type { ChainAnnotation } from "./chains.js";
+import { buildRecallQueries } from "./recall-queries.js";
+import { knownPeople } from "./store.js";
+import { detectPeople, getAliasIndex } from "./people.js";
 
-const ORIGIN_WEIGHTS: Record<QueryOrigin, number> = {
-  primary: 1.25,
-  agent: 1,
-  cli: 0.6,
-};
-
-const STOPWORDS = new Set([
-  "about",
-  "after",
-  "again",
-  "also",
-  "an",
-  "and",
-  "are",
-  "as",
-  "because",
-  "been",
-  "before",
-  "did",
-  "does",
-  "for",
-  "from",
-  "has",
-  "have",
-  "how",
-  "in",
-  "into",
-  "is",
-  "it",
-  "me",
-  "my",
-  "of",
-  "on",
-  "our",
-  "to",
-  "the",
-  "this",
-  "was",
-  "we",
-  "were",
-  "what",
-  "when",
-  "where",
-  "which",
-  "who",
-  "why",
-  "with",
-  "you",
-]);
+export { buildRecallQueries };
 
 export interface RecallOptions {
   filters?: SearchFilters;
   k?: number;
   deep?: boolean;
   noExpand?: boolean;
+  /** Disable the relative score cutoff (`--no-cutoff`). */
+  noCutoff?: boolean;
+  /** Second pass through the local cross-encoder (`--rerank`). */
+  rerank?: boolean;
   completeness?: SearchCompleteness;
   completeLimit?: number;
   requireComplete?: boolean;
+  /** Clock for the recency bonus (default: wall clock). Fixed by the eval harness. */
+  now?: number;
+  tunables?: SearchOptions["tunables"];
+  /** Explicit index slot (`--index-slot`); default: env/active.json. */
+  slot?: string;
 }
 
 export interface RecallHit {
@@ -91,9 +55,18 @@ export interface RecallHit {
   bestChunk: string;
   /** Timeline context when the entry belongs to a `follows` chain. */
   chain?: ChainAnnotation;
+  /** Retrieved hits whose explicit links lent this entry part of their score. */
+  spreadFrom?: string[];
+  /** On a summary: its cited sources that were also returned. */
+  digestOf?: string[];
+  /** On a raw entry: returned summaries that cite it. */
+  coveredBy?: string[];
+  /** Raw cross-encoder score when the hit was in the reranked block. */
+  rerankScore?: number;
   reasons?: {
     semanticRank?: number;
     lexicalRank?: number;
+    entityRank?: number;
     matchedTerms: string[];
     retrievalSignals: string[];
   };
@@ -113,64 +86,16 @@ export interface RecallReport {
   k: number;
   pool: number;
   chunkRows: number;
+  /** The index slot this recall read, and its format. */
+  index: { slot: string; format: 1 | 2 };
+  /** Relative score cutoff outcome (never applied on exhaustive runs). */
+  cutoff?: { tau: number; applied: boolean; dropped: number };
+  /** People named in the question, resolved through memory/people/ aliases. */
+  entities?: { people: string[]; ambiguous: string[] };
+  /** Reranker pass, when requested. */
+  rerank?: { model: string; n: number; ms: number };
   warnings: string[];
   hits: RecallHit[];
-}
-
-function normalizeSpace(s: string): string {
-  return s.replace(/\s+/g, " ").trim();
-}
-
-function keywordPhrase(s: string): string {
-  const tokens = (s.toLowerCase().match(/[a-z0-9][a-z0-9-]*/g) ?? [])
-    .filter((t) => t.length > 1 && !STOPWORDS.has(t));
-  return normalizeSpace([...new Set(tokens)].join(" "));
-}
-
-function entityPhrase(s: string): string {
-  const entities = s.match(/\b[A-Z][A-Za-z0-9-]*(?:\s+[A-Z][A-Za-z0-9-]*)*/g) ?? [];
-  return normalizeSpace([...new Set(entities.filter((e) => !STOPWORDS.has(e.toLowerCase())))].join(" "));
-}
-
-function filterPhrase(filters: SearchFilters, keywords: string): string {
-  const parts = [
-    filters.type,
-    filters.person,
-    filters.team,
-    filters.tag,
-    filters.since ? `since ${filters.since}` : undefined,
-    filters.until ? `until ${filters.until}` : undefined,
-    keywords,
-  ].filter(Boolean);
-  return normalizeSpace(parts.join(" "));
-}
-
-function pushQuery(out: QuerySpec[], seen: Set<string>, text: string, origin: QueryOrigin): void {
-  const normalized = normalizeSpace(text);
-  const key = normalized.toLowerCase();
-  if (!normalized || seen.has(key)) return;
-  seen.add(key);
-  out.push({ text: normalized, origin, weight: ORIGIN_WEIGHTS[origin] });
-}
-
-export function buildRecallQueries(positionals: string[], filters: SearchFilters = {}, noExpand = false): QuerySpec[] {
-  const primary = normalizeSpace(positionals[0] ?? "");
-  if (!primary) return [];
-
-  const seen = new Set<string>();
-  const out: QuerySpec[] = [];
-  pushQuery(out, seen, primary, "primary");
-  for (const phrasing of positionals.slice(1)) pushQuery(out, seen, phrasing, "agent");
-
-  if (!noExpand) {
-    const keywords = keywordPhrase(primary);
-    const entities = entityPhrase(primary);
-    pushQuery(out, seen, keywords, "cli");
-    pushQuery(out, seen, entities, "cli");
-    pushQuery(out, seen, filterPhrase(filters, keywords || entities), "cli");
-  }
-
-  return out;
 }
 
 export async function recall(positionals: string[], opts: RecallOptions = {}): Promise<RecallReport> {
@@ -178,11 +103,25 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
   const mode = opts.completeness ?? "complete-if-small";
   const k = opts.k ?? 40;
   const completeLimit = opts.completeLimit ?? DEFAULT_COMPLETE_LIMIT;
-  const queries = buildRecallQueries(positionals, filters, Boolean(opts.noExpand));
+  // Nicknames/display names in the question resolve through memory/people/
+  // aliases so "Zhenya" reaches entries filed under her slug. A typed slug (or
+  // its humanized form) already matches lexically and is left alone —
+  // augmenting it boosted every entry about that person and cost exact-title
+  // lookups their first place.
+  const primaryText = positionals[0] ?? "";
+  // The alias vocabulary comes from the slot this recall will read, so a
+  // slot-pinned run never falls back to a full parse of the default slot.
+  const people = primaryText.trim() ? detectPeople(primaryText, await getAliasIndex(() => knownPeople(opts.slot))).aliased : [];
+  const queries = buildRecallQueries(positionals, filters, Boolean(opts.noExpand), people);
   const search = await searchDetailed(queries, filters, k, {
     deep: opts.deep ?? true,
     completeness: mode,
     completeLimit,
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    ...(opts.tunables ? { tunables: opts.tunables } : {}),
+    ...(opts.noCutoff ? { noCutoff: true } : {}),
+    ...(opts.rerank !== undefined ? { rerank: opts.rerank } : {}),
+    ...(opts.slot ? { slot: opts.slot } : {}),
   });
 
   const warnings: string[] = [];
@@ -217,6 +156,10 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
     k: search.report.k,
     pool: search.report.pool,
     chunkRows: search.report.chunkRows,
+    index: search.report.index,
+    ...(search.report.cutoff ? { cutoff: search.report.cutoff } : {}),
+    ...(search.report.entities ? { entities: search.report.entities } : {}),
+    ...(search.report.rerank ? { rerank: search.report.rerank } : {}),
     warnings,
     hits: search.hits.map((h) => ({
       id: h.entry.id,
@@ -236,6 +179,10 @@ export async function recall(positionals: string[], opts: RecallOptions = {}): P
       score: h.score,
       bestChunk: h.bestChunk,
       ...(h.chain ? { chain: h.chain } : {}),
+      ...(h.spreadFrom ? { spreadFrom: h.spreadFrom } : {}),
+      ...(h.digestOf ? { digestOf: h.digestOf } : {}),
+      ...(h.coveredBy ? { coveredBy: h.coveredBy } : {}),
+      ...(h.rerankScore !== undefined ? { rerankScore: h.rerankScore } : {}),
       ...(h.reasons ? { reasons: h.reasons } : {}),
     })),
   };

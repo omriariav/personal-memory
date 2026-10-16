@@ -1,0 +1,1508 @@
+{
+  "current": [
+    {
+      "queries": [
+        {
+          "text": "otter hiring loop",
+          "origin": "primary",
+          "weight": 1.25
+        }
+      ],
+      "filters": {},
+      "mode": "complete-if-small",
+      "exhaustive": true,
+      "requireComplete": false,
+      "candidateCount": 7,
+      "consideredCount": 7,
+      "retrievalSignalCount": 7,
+      "returnedCount": 5,
+      "limitedByK": true,
+      "k": 5,
+      "pool": 56,
+      "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
+      "cutoff": {
+        "tau": 0.5,
+        "applied": false,
+        "dropped": 0
+      },
+      "entities": {
+        "people": [],
+        "ambiguous": []
+      },
+      "warnings": [
+        "Only 5 of 7 considered candidates are returned by -k 5."
+      ],
+      "hits": [
+        {
+          "id": "2026-01-03-otter-hiring",
+          "title": "Otter hiring loop",
+          "type": "hiring",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-03",
+          "people": [
+            "chen-mizrahi"
+          ],
+          "teams": [
+            "platform"
+          ],
+          "tags": [],
+          "path": "<root>/memory/entries/2026/01/2026-01-03-otter-hiring.md",
+          "relPath": "memory/entries/2026/01/2026-01-03-otter-hiring.md",
+          "score": 0.1180278732716311,
+          "bestChunk": "interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers",
+          "reasons": {
+            "semanticRank": 2,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "hir",
+              "loop",
+              "otter"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-05-budget-decided",
+          "title": "Budget freeze approved",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-05",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "follows": [
+            "2026-01-04-budget-pending"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "relPath": "memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "score": 0.07848074821838834,
+          "bestChunk": "Freeze approved: spending paused until the quarterly forecast settles.",
+          "chain": {
+            "prev": [
+              "2026-01-04-budget-pending"
+            ],
+            "next": [],
+            "relations": {
+              "2026-01-04-budget-pending": "supersedes"
+            },
+            "superseded": false,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            }
+          },
+          "spreadFrom": [
+            "2026-01-04-budget-pending"
+          ],
+          "coveredBy": [
+            "summary-tag-budget"
+          ],
+          "reasons": {
+            "semanticRank": 3,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic",
+              "spread"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-04-budget-pending",
+          "title": "Budget freeze pending",
+          "type": "pending-decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-04",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "relPath": "memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "score": 0.07694191001802778,
+          "bestChunk": "Should we freeze the budget until the forecast settles?",
+          "chain": {
+            "prev": [],
+            "next": [
+              "2026-01-05-budget-decided"
+            ],
+            "relations": {
+              "2026-01-05-budget-decided": "supersedes"
+            },
+            "superseded": true,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "status": "resolved",
+            "resolvedBy": "2026-01-05-budget-decided"
+          },
+          "spreadFrom": [
+            "2026-01-05-budget-decided"
+          ],
+          "coveredBy": [
+            "summary-tag-budget"
+          ],
+          "reasons": {
+            "semanticRank": 1,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic",
+              "spread"
+            ]
+          }
+        },
+        {
+          "id": "summary-tag-budget",
+          "title": "Rolling summary — #budget",
+          "type": "summary",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-07",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "sources": [
+            "2026-01-02-quokka-budget",
+            "2026-01-04-budget-pending",
+            "2026-01-05-budget-decided"
+          ],
+          "path": "<root>/memory/summaries/summary-tag-budget.md",
+          "relPath": "memory/summaries/summary-tag-budget.md",
+          "score": 0.06511645020657071,
+          "bestChunk": "## Synthesis\n\nBudget was reviewed, a freeze was proposed and then approved.",
+          "spreadFrom": [
+            "2026-01-04-budget-pending"
+          ],
+          "digestOf": [
+            "2026-01-02-quokka-budget",
+            "2026-01-04-budget-pending",
+            "2026-01-05-budget-decided"
+          ],
+          "reasons": {
+            "semanticRank": 7,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic",
+              "spread"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-02-quokka-budget",
+          "title": "Quokka budget review",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-02",
+          "people": [
+            "boris-cohen",
+            "ana-levi"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "source_ids": [
+            "slack:C1:1.0"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-02-quokka-budget.md",
+          "relPath": "memory/entries/2026/01/2026-01-02-quokka-budget.md",
+          "score": 0.06481582717957295,
+          "bestChunk": "spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts",
+          "spreadFrom": [
+            "summary-tag-budget"
+          ],
+          "coveredBy": [
+            "summary-tag-budget"
+          ],
+          "reasons": {
+            "semanticRank": 5,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic",
+              "spread"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "queries": [
+        {
+          "text": "budget review",
+          "origin": "primary",
+          "weight": 1.25
+        },
+        {
+          "text": "spending forecasts",
+          "origin": "agent",
+          "weight": 1
+        },
+        {
+          "text": "boris-cohen budget review",
+          "origin": "cli",
+          "weight": 0.6
+        }
+      ],
+      "filters": {
+        "person": "boris-cohen"
+      },
+      "mode": "complete-if-small",
+      "exhaustive": true,
+      "requireComplete": false,
+      "candidateCount": 4,
+      "consideredCount": 4,
+      "retrievalSignalCount": 4,
+      "returnedCount": 4,
+      "limitedByK": false,
+      "k": 10,
+      "pool": 40,
+      "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
+      "cutoff": {
+        "tau": 0.5,
+        "applied": false,
+        "dropped": 0
+      },
+      "entities": {
+        "people": [],
+        "ambiguous": []
+      },
+      "warnings": [],
+      "hits": [
+        {
+          "id": "2026-01-05-budget-decided",
+          "title": "Budget freeze approved",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-05",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "follows": [
+            "2026-01-04-budget-pending"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "relPath": "memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "score": 0.3387595677742538,
+          "bestChunk": "Freeze approved: spending paused until the quarterly forecast settles.",
+          "chain": {
+            "prev": [
+              "2026-01-04-budget-pending"
+            ],
+            "next": [],
+            "relations": {
+              "2026-01-04-budget-pending": "supersedes"
+            },
+            "superseded": false,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            }
+          },
+          "spreadFrom": [
+            "2026-01-04-budget-pending"
+          ],
+          "coveredBy": [
+            "summary-tag-budget"
+          ],
+          "reasons": {
+            "semanticRank": 2,
+            "lexicalRank": 2,
+            "matchedTerms": [
+              "bori",
+              "budget",
+              "cohen",
+              "forecast",
+              "spend"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical",
+              "spread"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-04-budget-pending",
+          "title": "Budget freeze pending",
+          "type": "pending-decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-04",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "relPath": "memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "score": 0.33211722330809196,
+          "bestChunk": "Should we freeze the budget until the forecast settles?",
+          "chain": {
+            "prev": [],
+            "next": [
+              "2026-01-05-budget-decided"
+            ],
+            "relations": {
+              "2026-01-05-budget-decided": "supersedes"
+            },
+            "superseded": true,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "status": "resolved",
+            "resolvedBy": "2026-01-05-budget-decided"
+          },
+          "spreadFrom": [
+            "2026-01-05-budget-decided"
+          ],
+          "coveredBy": [
+            "summary-tag-budget"
+          ],
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 3,
+            "matchedTerms": [
+              "bori",
+              "budget",
+              "cohen",
+              "forecast"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical",
+              "spread"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-02-quokka-budget",
+          "title": "Quokka budget review",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-02",
+          "people": [
+            "boris-cohen",
+            "ana-levi"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "source_ids": [
+            "slack:C1:1.0"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-02-quokka-budget.md",
+          "relPath": "memory/entries/2026/01/2026-01-02-quokka-budget.md",
+          "score": 0.32603863230336283,
+          "bestChunk": "spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts",
+          "spreadFrom": [
+            "summary-tag-budget"
+          ],
+          "coveredBy": [
+            "summary-tag-budget"
+          ],
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "bori",
+              "budget",
+              "cohen",
+              "forecast",
+              "review",
+              "spend"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical",
+              "spread"
+            ]
+          }
+        },
+        {
+          "id": "summary-tag-budget",
+          "title": "Rolling summary — #budget",
+          "type": "summary",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-07",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "sources": [
+            "2026-01-02-quokka-budget",
+            "2026-01-04-budget-pending",
+            "2026-01-05-budget-decided"
+          ],
+          "path": "<root>/memory/summaries/summary-tag-budget.md",
+          "relPath": "memory/summaries/summary-tag-budget.md",
+          "score": 0.297865217022068,
+          "bestChunk": "## Synthesis\n\nBudget was reviewed, a freeze was proposed and then approved.",
+          "spreadFrom": [
+            "2026-01-02-quokka-budget"
+          ],
+          "digestOf": [
+            "2026-01-02-quokka-budget",
+            "2026-01-04-budget-pending",
+            "2026-01-05-budget-decided"
+          ],
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "bori",
+              "budget",
+              "cohen",
+              "review"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical",
+              "spread"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "queries": [
+        {
+          "text": "zebra migration",
+          "origin": "primary",
+          "weight": 1.25
+        }
+      ],
+      "filters": {
+        "graph": "team-x"
+      },
+      "mode": "complete-if-small",
+      "exhaustive": true,
+      "requireComplete": false,
+      "candidateCount": 1,
+      "consideredCount": 1,
+      "retrievalSignalCount": 1,
+      "returnedCount": 1,
+      "limitedByK": false,
+      "k": 5,
+      "pool": 40,
+      "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
+      "cutoff": {
+        "tau": 0.5,
+        "applied": false,
+        "dropped": 0
+      },
+      "entities": {
+        "people": [],
+        "ambiguous": []
+      },
+      "warnings": [],
+      "hits": [
+        {
+          "id": "2026-01-01-zebra-migration",
+          "title": "Zebra migration plan",
+          "type": "note",
+          "graphs": [
+            "default",
+            "team-x"
+          ],
+          "date": "2026-01-01",
+          "people": [
+            "ana-levi"
+          ],
+          "teams": [
+            "platform"
+          ],
+          "tags": [
+            "migration"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-01-zebra-migration.md",
+          "relPath": "memory/entries/2026/01/2026-01-01-zebra-migration.md",
+          "score": 0.12073479504412674,
+          "bestChunk": "long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions",
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "migration",
+              "zebra"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "queries": [
+        {
+          "text": "codeword zephyr",
+          "origin": "primary",
+          "weight": 1.25
+        }
+      ],
+      "filters": {},
+      "mode": "none",
+      "exhaustive": false,
+      "requireComplete": false,
+      "candidateCount": 7,
+      "consideredCount": 7,
+      "retrievalSignalCount": 7,
+      "returnedCount": 3,
+      "limitedByK": true,
+      "k": 3,
+      "pool": 40,
+      "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
+      "cutoff": {
+        "tau": 0.5,
+        "applied": false,
+        "dropped": 0
+      },
+      "entities": {
+        "people": [],
+        "ambiguous": []
+      },
+      "warnings": [
+        "Recall is hybrid-ranked, not exhaustive. Add filters, use --complete, or raise --complete-limit for a stronger guarantee.",
+        "Only 3 of 7 considered candidates are returned by -k 3."
+      ],
+      "hits": [
+        {
+          "id": "2026-01-06-rare-codeword",
+          "title": "Rare codeword event",
+          "type": "event",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-06",
+          "people": [],
+          "teams": [],
+          "tags": [
+            "needle"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-06-rare-codeword.md",
+          "relPath": "memory/entries/2026/01/2026-01-06-rare-codeword.md",
+          "score": 0.12083117960382084,
+          "bestChunk": "codeword zephyr quokka adopted as the internal protocol name.",
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "codeword",
+              "zephyr"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-05-budget-decided",
+          "title": "Budget freeze approved",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-05",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "follows": [
+            "2026-01-04-budget-pending"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "relPath": "memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "score": 0.07568057045231183,
+          "bestChunk": "Freeze approved: spending paused until the quarterly forecast settles.",
+          "chain": {
+            "prev": [
+              "2026-01-04-budget-pending"
+            ],
+            "next": [],
+            "relations": {
+              "2026-01-04-budget-pending": "supersedes"
+            },
+            "superseded": false,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            }
+          },
+          "spreadFrom": [
+            "2026-01-04-budget-pending"
+          ],
+          "reasons": {
+            "semanticRank": 3,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic",
+              "spread"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-04-budget-pending",
+          "title": "Budget freeze pending",
+          "type": "pending-decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-04",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "relPath": "memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "score": 0.07419663769834493,
+          "bestChunk": "Should we freeze the budget until the forecast settles?",
+          "chain": {
+            "prev": [],
+            "next": [
+              "2026-01-05-budget-decided"
+            ],
+            "relations": {
+              "2026-01-05-budget-decided": "supersedes"
+            },
+            "superseded": true,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "status": "resolved",
+            "resolvedBy": "2026-01-05-budget-decided"
+          },
+          "spreadFrom": [
+            "2026-01-05-budget-decided"
+          ],
+          "reasons": {
+            "semanticRank": 2,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic",
+              "spread"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "legacy": [
+    {
+      "queries": [
+        {
+          "text": "otter hiring loop",
+          "origin": "primary",
+          "weight": 1.25
+        }
+      ],
+      "filters": {},
+      "mode": "complete-if-small",
+      "exhaustive": true,
+      "requireComplete": false,
+      "candidateCount": 7,
+      "consideredCount": 7,
+      "retrievalSignalCount": 7,
+      "returnedCount": 5,
+      "limitedByK": true,
+      "k": 5,
+      "pool": 56,
+      "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
+      "cutoff": {
+        "tau": 0,
+        "applied": false,
+        "dropped": 0
+      },
+      "warnings": [
+        "Only 5 of 7 considered candidates are returned by -k 5."
+      ],
+      "hits": [
+        {
+          "id": "2026-01-03-otter-hiring",
+          "title": "Otter hiring loop",
+          "type": "hiring",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-03",
+          "people": [
+            "chen-mizrahi"
+          ],
+          "teams": [
+            "platform"
+          ],
+          "tags": [],
+          "path": "<root>/memory/entries/2026/01/2026-01-03-otter-hiring.md",
+          "relPath": "memory/entries/2026/01/2026-01-03-otter-hiring.md",
+          "score": 0.041242187144329374,
+          "bestChunk": "interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers interviews and offers",
+          "reasons": {
+            "semanticRank": 2,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "hir",
+              "loop",
+              "otter"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-04-budget-pending",
+          "title": "Budget freeze pending",
+          "type": "pending-decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-04",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "relPath": "memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "score": 0.020792062486778368,
+          "bestChunk": "Should we freeze the budget until the forecast settles?",
+          "chain": {
+            "prev": [],
+            "next": [
+              "2026-01-05-budget-decided"
+            ],
+            "relations": {
+              "2026-01-05-budget-decided": "supersedes"
+            },
+            "superseded": true,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "status": "resolved",
+            "resolvedBy": "2026-01-05-budget-decided"
+          },
+          "reasons": {
+            "semanticRank": 1,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-05-budget-decided",
+          "title": "Budget freeze approved",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-05",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "follows": [
+            "2026-01-04-budget-pending"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "relPath": "memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "score": 0.020135245325667347,
+          "bestChunk": "Freeze approved: spending paused until the quarterly forecast settles.",
+          "chain": {
+            "prev": [
+              "2026-01-04-budget-pending"
+            ],
+            "next": [],
+            "relations": {
+              "2026-01-04-budget-pending": "supersedes"
+            },
+            "superseded": false,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            }
+          },
+          "reasons": {
+            "semanticRank": 3,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-01-zebra-migration",
+          "title": "Zebra migration plan",
+          "type": "note",
+          "graphs": [
+            "default",
+            "team-x"
+          ],
+          "date": "2026-01-01",
+          "people": [
+            "ana-levi"
+          ],
+          "teams": [
+            "platform"
+          ],
+          "tags": [
+            "migration"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-01-zebra-migration.md",
+          "relPath": "memory/entries/2026/01/2026-01-01-zebra-migration.md",
+          "score": 0.019808052311927043,
+          "bestChunk": "long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions",
+          "reasons": {
+            "semanticRank": 4,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-02-quokka-budget",
+          "title": "Quokka budget review",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-02",
+          "people": [
+            "boris-cohen",
+            "ana-levi"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "source_ids": [
+            "slack:C1:1.0"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-02-quokka-budget.md",
+          "relPath": "memory/entries/2026/01/2026-01-02-quokka-budget.md",
+          "score": 0.019506358196374536,
+          "bestChunk": "spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts",
+          "reasons": {
+            "semanticRank": 5,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "queries": [
+        {
+          "text": "budget review",
+          "origin": "primary",
+          "weight": 1.25
+        },
+        {
+          "text": "spending forecasts",
+          "origin": "agent",
+          "weight": 1
+        },
+        {
+          "text": "boris-cohen budget review",
+          "origin": "cli",
+          "weight": 0.6
+        }
+      ],
+      "filters": {
+        "person": "boris-cohen"
+      },
+      "mode": "complete-if-small",
+      "exhaustive": true,
+      "requireComplete": false,
+      "candidateCount": 4,
+      "consideredCount": 4,
+      "retrievalSignalCount": 4,
+      "returnedCount": 4,
+      "limitedByK": false,
+      "k": 10,
+      "pool": 40,
+      "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
+      "cutoff": {
+        "tau": 0,
+        "applied": false,
+        "dropped": 0
+      },
+      "warnings": [],
+      "hits": [
+        {
+          "id": "2026-01-02-quokka-budget",
+          "title": "Quokka budget review",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-02",
+          "people": [
+            "boris-cohen",
+            "ana-levi"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "source_ids": [
+            "slack:C1:1.0"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-02-quokka-budget.md",
+          "relPath": "memory/entries/2026/01/2026-01-02-quokka-budget.md",
+          "score": 0.09284355357936389,
+          "bestChunk": "spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts spending and forecasts",
+          "coveredBy": [
+            "summary-tag-budget"
+          ],
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "bori",
+              "budget",
+              "cohen",
+              "forecast",
+              "review",
+              "spend"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-04-budget-pending",
+          "title": "Budget freeze pending",
+          "type": "pending-decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-04",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "relPath": "memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "score": 0.09244344742777451,
+          "bestChunk": "Should we freeze the budget until the forecast settles?",
+          "chain": {
+            "prev": [],
+            "next": [
+              "2026-01-05-budget-decided"
+            ],
+            "relations": {
+              "2026-01-05-budget-decided": "supersedes"
+            },
+            "superseded": true,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "status": "resolved",
+            "resolvedBy": "2026-01-05-budget-decided"
+          },
+          "coveredBy": [
+            "summary-tag-budget"
+          ],
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 3,
+            "matchedTerms": [
+              "bori",
+              "budget",
+              "cohen",
+              "forecast"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-05-budget-decided",
+          "title": "Budget freeze approved",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-05",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "follows": [
+            "2026-01-04-budget-pending"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "relPath": "memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "score": 0.0918707103710978,
+          "bestChunk": "Freeze approved: spending paused until the quarterly forecast settles.",
+          "chain": {
+            "prev": [
+              "2026-01-04-budget-pending"
+            ],
+            "next": [],
+            "relations": {
+              "2026-01-04-budget-pending": "supersedes"
+            },
+            "superseded": false,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            }
+          },
+          "coveredBy": [
+            "summary-tag-budget"
+          ],
+          "reasons": {
+            "semanticRank": 2,
+            "lexicalRank": 2,
+            "matchedTerms": [
+              "bori",
+              "budget",
+              "cohen",
+              "forecast",
+              "spend"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        },
+        {
+          "id": "summary-tag-budget",
+          "title": "Rolling summary — #budget",
+          "type": "summary",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-07",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "sources": [
+            "2026-01-02-quokka-budget",
+            "2026-01-04-budget-pending",
+            "2026-01-05-budget-decided"
+          ],
+          "path": "<root>/memory/summaries/summary-tag-budget.md",
+          "relPath": "memory/summaries/summary-tag-budget.md",
+          "score": 0.07727528808201181,
+          "bestChunk": "## Synthesis\n\nBudget was reviewed, a freeze was proposed and then approved.",
+          "digestOf": [
+            "2026-01-02-quokka-budget",
+            "2026-01-04-budget-pending",
+            "2026-01-05-budget-decided"
+          ],
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "bori",
+              "budget",
+              "cohen",
+              "review"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "queries": [
+        {
+          "text": "zebra migration",
+          "origin": "primary",
+          "weight": 1.25
+        }
+      ],
+      "filters": {
+        "graph": "team-x"
+      },
+      "mode": "complete-if-small",
+      "exhaustive": true,
+      "requireComplete": false,
+      "candidateCount": 1,
+      "consideredCount": 1,
+      "retrievalSignalCount": 1,
+      "returnedCount": 1,
+      "limitedByK": false,
+      "k": 5,
+      "pool": 40,
+      "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
+      "cutoff": {
+        "tau": 0,
+        "applied": false,
+        "dropped": 0
+      },
+      "warnings": [],
+      "hits": [
+        {
+          "id": "2026-01-01-zebra-migration",
+          "title": "Zebra migration plan",
+          "type": "note",
+          "graphs": [
+            "default",
+            "team-x"
+          ],
+          "date": "2026-01-01",
+          "people": [
+            "ana-levi"
+          ],
+          "teams": [
+            "platform"
+          ],
+          "tags": [
+            "migration"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-01-zebra-migration.md",
+          "relPath": "memory/entries/2026/01/2026-01-01-zebra-migration.md",
+          "score": 0.04156443763814199,
+          "bestChunk": "long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions long body about databases and regions",
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "migration",
+              "zebra"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "queries": [
+        {
+          "text": "codeword zephyr",
+          "origin": "primary",
+          "weight": 1.25
+        }
+      ],
+      "filters": {},
+      "mode": "none",
+      "exhaustive": false,
+      "requireComplete": false,
+      "candidateCount": 7,
+      "consideredCount": 7,
+      "retrievalSignalCount": 7,
+      "returnedCount": 3,
+      "limitedByK": true,
+      "k": 3,
+      "pool": 40,
+      "chunkRows": 7,
+      "index": {
+        "slot": "legacy",
+        "format": 1
+      },
+      "cutoff": {
+        "tau": 0,
+        "applied": false,
+        "dropped": 0
+      },
+      "warnings": [
+        "Recall is hybrid-ranked, not exhaustive. Add filters, use --complete, or raise --complete-limit for a stronger guarantee.",
+        "Only 3 of 7 considered candidates are returned by -k 3."
+      ],
+      "hits": [
+        {
+          "id": "2026-01-06-rare-codeword",
+          "title": "Rare codeword event",
+          "type": "event",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-06",
+          "people": [],
+          "teams": [],
+          "tags": [
+            "needle"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-06-rare-codeword.md",
+          "relPath": "memory/entries/2026/01/2026-01-06-rare-codeword.md",
+          "score": 0.04159761920787275,
+          "bestChunk": "codeword zephyr quokka adopted as the internal protocol name.",
+          "reasons": {
+            "semanticRank": 1,
+            "lexicalRank": 1,
+            "matchedTerms": [
+              "codeword",
+              "zephyr"
+            ],
+            "retrievalSignals": [
+              "semantic",
+              "lexical"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-04-budget-pending",
+          "title": "Budget freeze pending",
+          "type": "pending-decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-04",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "relPath": "memory/entries/2026/01/2026-01-04-budget-pending.md",
+          "score": 0.020456706640217426,
+          "bestChunk": "Should we freeze the budget until the forecast settles?",
+          "chain": {
+            "prev": [],
+            "next": [
+              "2026-01-05-budget-decided"
+            ],
+            "relations": {
+              "2026-01-05-budget-decided": "supersedes"
+            },
+            "superseded": true,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "status": "resolved",
+            "resolvedBy": "2026-01-05-budget-decided"
+          },
+          "reasons": {
+            "semanticRank": 2,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic"
+            ]
+          }
+        },
+        {
+          "id": "2026-01-05-budget-decided",
+          "title": "Budget freeze approved",
+          "type": "decision",
+          "graphs": [
+            "default"
+          ],
+          "date": "2026-01-05",
+          "people": [
+            "boris-cohen"
+          ],
+          "teams": [],
+          "tags": [
+            "budget"
+          ],
+          "follows": [
+            "2026-01-04-budget-pending"
+          ],
+          "path": "<root>/memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "relPath": "memory/entries/2026/01/2026-01-05-budget-decided.md",
+          "score": 0.020135245325667347,
+          "bestChunk": "Freeze approved: spending paused until the quarterly forecast settles.",
+          "chain": {
+            "prev": [
+              "2026-01-04-budget-pending"
+            ],
+            "next": [],
+            "relations": {
+              "2026-01-04-budget-pending": "supersedes"
+            },
+            "superseded": false,
+            "current": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            },
+            "latest": {
+              "id": "2026-01-05-budget-decided",
+              "type": "decision",
+              "date": "2026-01-05"
+            }
+          },
+          "reasons": {
+            "semanticRank": 3,
+            "matchedTerms": [],
+            "retrievalSignals": [
+              "semantic"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

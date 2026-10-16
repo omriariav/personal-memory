@@ -1,6 +1,6 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { INDEX_DIR, entrySearchText, hashEntry } from "./ingest.js";
+import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { INDEX_DIR, LEXICAL_TITLE_REPEAT, entrySearchText, hashEntry } from "./ingest.js";
 import type { MemoryEntry } from "./schema.js";
 
 /**
@@ -10,8 +10,8 @@ import type { MemoryEntry } from "./schema.js";
  * (a version bump or deleted file just triggers a rebuild).
  */
 
-const LEXICAL_PATH = join(INDEX_DIR, "lexical.json");
-const LEXICAL_VERSION = 2;
+export const LEXICAL_PATH = join(INDEX_DIR, "lexical.json");
+const LEXICAL_VERSION = 3; // 3: records titleRepeat
 
 interface LexDoc {
   id: string;
@@ -22,6 +22,8 @@ interface LexDoc {
 
 export interface LexicalIndex {
   version: number;
+  /** Title repetitions the docs were tokenized with; a mismatch rebuilds. */
+  titleRepeat?: number;
   /** null = tombstone of a removed/re-indexed doc; ordinals stay stable. */
   docs: (LexDoc | null)[];
   /** term -> [docOrdinal, termFrequency][] (live ordinals only). */
@@ -49,26 +51,42 @@ export function tokenize(s: string): string[] {
 }
 
 function emptyIndex(): LexicalIndex {
-  return { version: LEXICAL_VERSION, docs: [], postings: {} };
+  return { version: LEXICAL_VERSION, titleRepeat: LEXICAL_TITLE_REPEAT, docs: [], postings: {} };
 }
 
-export async function readLexical(): Promise<LexicalIndex | null> {
+export async function readLexical(path: string = LEXICAL_PATH): Promise<LexicalIndex | null> {
   try {
-    const idx = JSON.parse(await readFile(LEXICAL_PATH, "utf8")) as LexicalIndex;
-    if (idx.version === LEXICAL_VERSION && Array.isArray(idx.docs) && idx.postings) return idx;
+    const idx = JSON.parse(await readFile(path, "utf8")) as LexicalIndex;
+    if (
+      idx.version === LEXICAL_VERSION &&
+      (idx.titleRepeat ?? 1) === LEXICAL_TITLE_REPEAT &&
+      Array.isArray(idx.docs) &&
+      idx.postings
+    )
+      return idx;
   } catch {
     // missing or corrupt — caller falls back / sync rebuilds
   }
   return null;
 }
 
-function addDoc(idx: LexicalIndex, e: MemoryEntry): void {
-  const terms = tokenize(entrySearchText(e));
+function addDocTokens(idx: LexicalIndex, id: string, hash: string, terms: string[]): void {
   const ord = idx.docs.length;
-  idx.docs.push({ id: e.id, hash: hashEntry(e), len: terms.length });
+  idx.docs.push({ id, hash, len: terms.length });
   const tf = new Map<string, number>();
   for (const t of terms) tf.set(t, (tf.get(t) ?? 0) + 1);
   for (const [t, f] of tf) (idx.postings[t] ??= []).push([ord, f]);
+}
+
+function addDoc(idx: LexicalIndex, e: MemoryEntry): void {
+  addDocTokens(idx, e.id, hashEntry(e), tokenize(entrySearchText(e)));
+}
+
+/** Build the reference BM25 index from pre-tokenized docs (the catalog's `lex` column). */
+export function buildLexicalFromTokens(docs: { id: string; hash: string; tokens: string[] }[]): LexicalIndex {
+  const idx = emptyIndex();
+  for (const d of docs) addDocTokens(idx, d.id, d.hash, d.tokens);
+  return idx;
 }
 
 /** Build an index over `entries` in memory (also the search-time fallback). */
@@ -83,8 +101,8 @@ export function buildLexical(entries: MemoryEntry[]): LexicalIndex {
  * only changed/new docs, tombstones removed ones, compacts (full rebuild in
  * memory) when tombstones pile up. Returns true if anything changed.
  */
-export async function syncLexical(entries: MemoryEntry[]): Promise<boolean> {
-  let idx = (await readLexical()) ?? emptyIndex();
+export async function syncLexical(entries: MemoryEntry[], path: string = LEXICAL_PATH): Promise<boolean> {
+  let idx = (await readLexical(path)) ?? emptyIndex();
 
   const wanted = new Map(entries.map((e) => [e.id, hashEntry(e)]));
   const drop = new Set<number>();
@@ -113,9 +131,55 @@ export async function syncLexical(entries: MemoryEntry[]): Promise<boolean> {
   const tombstones = idx.docs.filter((d) => !d).length;
   if (tombstones > idx.docs.length / 4) idx = buildLexical(entries);
 
-  await mkdir(INDEX_DIR, { recursive: true });
-  await writeFile(LEXICAL_PATH, JSON.stringify(idx), "utf8");
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(idx), "utf8");
   return true;
+}
+
+/**
+ * Parsed indexes by path, valid while the file still shows the (mtime, size)
+ * they were parsed at. `lexical.json` is megabytes at corpus scale and every
+ * search re-parsed it, which is the single largest avoidable cost on the
+ * legacy read path. Only `ensureLexical` reads through this: `syncLexical`
+ * MUTATES what `readLexical` hands it, so it keeps parsing its own copy.
+ */
+const parsedLexical = new Map<string, { mtimeMs: number; size: number; idx: LexicalIndex }>();
+
+/** The file's (mtime, size), or null when it is not there. */
+async function lexicalStamp(path: string): Promise<{ mtimeMs: number; size: number } | null> {
+  try {
+    const st = await stat(path);
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The read-path guarantee: a missing, corrupt or older-version index file is
+ * rebuilt from the current entries and persisted right here, so an upgrade
+ * never leaves `maintenance` reporting a missing lexical index until the
+ * next write, and search never rebuilds BM25 in memory per query.
+ *
+ * The result is READ-ONLY to callers — it is shared with every other reader
+ * of the same unchanged file.
+ */
+export async function ensureLexical(entries: MemoryEntry[], path: string = LEXICAL_PATH): Promise<LexicalIndex> {
+  const stamp = await lexicalStamp(path);
+  if (stamp) {
+    const hit = parsedLexical.get(path);
+    if (hit && hit.mtimeMs === stamp.mtimeMs && hit.size === stamp.size) return hit.idx;
+  }
+  const existing = await readLexical(path);
+  if (existing) {
+    if (stamp) parsedLexical.set(path, { ...stamp, idx: existing });
+    return existing;
+  }
+  await syncLexical(entries, path);
+  const rebuilt = (await readLexical(path)) ?? buildLexical(entries);
+  const after = await lexicalStamp(path);
+  if (after) parsedLexical.set(path, { ...after, idx: rebuilt });
+  return rebuilt;
 }
 
 /**

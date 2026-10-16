@@ -4,17 +4,15 @@ import { dirname, relative } from "node:path";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { FrontmatterSchema, type Frontmatter } from "./schema.js";
 import {
-  loadAllEntries,
   makeId,
   writeEntry,
   writeEntryAll,
   entryPath,
   hashEntry,
-  findEntryBySourceIds,
   normalizeSourceId,
   ROOT,
 } from "./ingest.js";
-import { search, findSimilar, syncIndex, applyFilters, type SearchCompleteness, type SearchFilters } from "./store.js";
+import { search, findSimilar, openCatalogForWrite, syncIndex, type SearchCompleteness, type SearchFilters } from "./store.js";
 import { DEFAULT_GRAPH, sharedGraphs, type GraphId, type MemoryEntry } from "./schema.js";
 import {
   createGraph,
@@ -26,9 +24,11 @@ import {
 } from "./graphs.js";
 import { copyEntry, deleteGraph, moveEntry, removeEntry, syncGraphs } from "./membership.js";
 import { commitMemoryRepo } from "./memory-git.js";
-import { buildChainIndex, entryStatus, validateFollowsTargets, type ChainAnnotation } from "./chains.js";
+import { buildChainIndex, chainAncestry, entryStatus, validateFollowsTargets, type ChainAnnotation } from "./chains.js";
 import { applyChainLink, dismissSlugSuggestion, mergeSlugs, proposeSlugMerge, slugUsage, type SlugKind } from "./graph-maintenance.js";
 import { recall, type RecallReport } from "./recall.js";
+import { resolveIndexSlotDetailed } from "./index-slots.js";
+import { openCatalog } from "./catalog.js";
 
 const rel = (p: string) => relative(ROOT, p);
 const list = (s?: string) =>
@@ -42,9 +42,24 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8").trim();
 }
 
-function filtersFrom(values: Record<string, unknown>): SearchFilters {
+/**
+ * `--index-slot <name>` picks the index slot for this command. Resolution in
+ * the engine is lazy (index-slots.ts), so exporting the flag as
+ * MEMORY_INDEX_SLOT before the first store call is enough; validating here
+ * turns a typo into one clear line instead of a stack trace mid-search.
+ */
+function applyIndexSlotFlag(values: Record<string, unknown>): void {
+  const slot = values["index-slot"] as string | undefined;
+  if (!slot) return;
+  resolveIndexSlotDetailed({ override: slot }); // throws "unknown index slot" / "invalid index slot name"
+  process.env.MEMORY_INDEX_SLOT = slot;
+}
+
+/** `--person` accepts a slug, a display name, a nickname, or a close slug (see `memory people`). */
+async function filtersFrom(values: Record<string, unknown>): Promise<SearchFilters> {
+  const { resolvePersonArg } = await import("./people-cli.js");
   return {
-    person: (values.person as string) || undefined,
+    person: await resolvePersonArg((values.person as string) || undefined),
     type: (values.type as string) || undefined,
     team: (values.team as string) || undefined,
     tag: (values.tag as string) || undefined,
@@ -110,8 +125,10 @@ function chainStatusLines(
   self: { id: string; type: string },
 ): string[] {
   const lines: string[] = [];
-  if (chain && chain.latest.id !== self.id) {
-    lines.push(`⤷ superseded by: ${chain.latest.id} (${chain.latest.type} · ${chain.latest.date})`);
+  if (chain?.superseded) {
+    lines.push(`⤷ superseded by: ${chain.current.id} (${chain.current.type} · ${chain.current.date})`);
+  } else if (chain && chain.latest.id !== self.id) {
+    lines.push(`↳ extended by: ${chain.latest.id} (${chain.latest.type} · ${chain.latest.date})`);
   }
   const status = chain?.status ?? (self.type === "pending-decision" || self.type === "todo" ? "open" : undefined);
   if (status) {
@@ -121,7 +138,7 @@ function chainStatusLines(
 }
 
 /** ` [open]` / ` [resolved → id]` marker for pending-decision/todo listings. */
-function statusSuffix(e: MemoryEntry, chainIndex: Map<string, ChainAnnotation>): string {
+function statusSuffix(e: Pick<MemoryEntry, "id" | "type">, chainIndex: Map<string, ChainAnnotation>): string {
   const s = entryStatus(e, chainIndex);
   if (!s) return "";
   return s.status === "resolved" ? `  [resolved → ${s.resolvedBy ?? "?"}]` : "  [open]";
@@ -163,15 +180,18 @@ async function cmdAdd(argv: string[]) {
   const capturedConnectors = await resolveCapturedConnectors(sourceIds, list(values.connector as string));
   const uniq = (xs: string[]) => [...new Set(xs)];
   const requestedGraph: GraphId = values.graph ? requireGraph(values.graph) : DEFAULT_GRAPH;
-  const entries = await loadAllEntries();
+  // A capture never requires a pre-built index — see `openCatalogForWrite`.
+  const catalog = await openCatalogForWrite();
 
   // --- resolve the target: an existing entry to update in place, or a new one ---
   let target: MemoryEntry | undefined;
   if (values.update) {
-    target = entries.find((e) => e.id === values.update);
-    if (!target) throw new Error(`--update: no entry with id '${values.update}'`);
+    const [meta] = await catalog.byIds([values.update as string]);
+    if (!meta) throw new Error(`--update: no entry with id '${values.update}'`);
+    target = (await catalog.hydrate([meta]))[0]!;
   } else if (sourceIds.length) {
-    target = findEntryBySourceIds(entries, sourceIds);
+    const [meta] = await catalog.bySourceIds(sourceIds);
+    target = meta ? (await catalog.hydrate([meta]))[0]! : undefined;
     if (target) {
       const matched = sourceIds.find((s) => (target!.source_ids ?? []).includes(s));
       console.log(`↻ matches existing ${target.id} via ${matched}`);
@@ -208,7 +228,8 @@ async function cmdAdd(argv: string[]) {
   if (follows.length) {
     const sourceId = target?.id ?? ((values.id as string) || makeId(date, title));
     const sourceDate = target?.date ?? date;
-    validateFollowsTargets(entries, { id: sourceId, date: sourceDate }, follows);
+    const ancestry = await chainAncestry((ids) => catalog.byIds(ids), follows);
+    validateFollowsTargets(ancestry, { id: sourceId, date: sourceDate }, follows);
   }
   const mergedFollows = uniq([...(target?.follows ?? []), ...follows]);
 
@@ -245,7 +266,7 @@ async function cmdAdd(argv: string[]) {
 
   // --- a brand-new id must be unique across ALL stores (chains/index/move key by id) ---
   if (!target) {
-    const collision = entries.find((e) => e.id === fm.id);
+    const [collision] = await catalog.byIds([fm.id]);
     if (collision) {
       throw new Error(
         `id '${fm.id}' already exists (graphs: ${collision.graphs.join(",")}; ${rel(collision.path)})\n` +
@@ -256,11 +277,9 @@ async function cmdAdd(argv: string[]) {
 
   // --- containment guard: a shared-graph entry only references fellow members ---
   {
-    const byId = new Map(entries.map((e) => [e.id, e]));
-    validateContainment(byId, { id: fm.id, graphs }, [
-      ...(fm.follows ?? []),
-      ...(fm.sources ?? []),
-    ]);
+    const refs = [...(fm.follows ?? []), ...(fm.sources ?? [])];
+    const byId = new Map((await catalog.byIds(refs)).map((t) => [t.id, t]));
+    validateContainment(byId, { id: fm.id, graphs }, refs);
   }
 
   // --- idempotency: skip a re-capture whose content is identical (hash ignores `updated`) ---
@@ -294,6 +313,9 @@ async function cmdAdd(argv: string[]) {
   console.log(`✓ ${target ? "updated" : "created"} ${fm.id}${label}`);
   console.log(`  ${rel(path)}`);
   console.log(`  indexed (+${stats.added} changed, ${stats.unchanged} unchanged)`);
+  for (const s of stats.slots.slice(1)) {
+    console.log(s.error ? `  ↻ slot ${s.slot} sync failed: ${s.error}` : `  ↻ synced slot ${s.slot}`);
+  }
   const captured = await markCapturedConnectors(capturedConnectors);
   if (captured.length) console.log(`  connector captured: ${captured.join(", ")}`);
 
@@ -484,7 +506,7 @@ async function cmdGraphs(argv: string[]) {
     return;
   }
   if (sub === "list" || sub === undefined) {
-    const entries = await loadAllEntries();
+    const entries = await (await openCatalog()).all();
     for (const store of listGraphStores()) {
       const count = entries.filter((e) => e.graphs.includes(store.graph)).length;
       const manifest = store.graph === DEFAULT_GRAPH ? null : await loadGraphManifest(store);
@@ -502,14 +524,123 @@ async function cmdGraphs(argv: string[]) {
 }
 
 async function cmdIndex(argv: string[]) {
-  const { values } = parseArgs({
-    args: argv,
-    options: { force: { type: "boolean" } },
+  // `--build` may be given with no slot name, in which case buildSlot picks
+  // the default; parseArgs needs that spelled as an explicit empty value.
+  const args = argv.map((a, i) => (a === "--build" && (argv[i + 1]?.startsWith("-") ?? true) ? "--build=" : a));
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      force: { type: "boolean" },
+      reembed: { type: "boolean" },
+      rebuild: { type: "boolean" },
+      optimize: { type: "boolean" },
+      "header-batch": { type: "string" },
+      build: { type: "string" },
+      "dry-run": { type: "boolean" },
+      activate: { type: "string" },
+      prune: { type: "boolean" },
+      confirm: { type: "boolean" },
+    },
+    allowPositionals: true,
   });
-  const stats = await syncIndex({ force: Boolean(values.force) });
+  if (positionals[0] === "slots") {
+    const { slotStatus, formatSlotTable } = await import("./slot-build.js");
+    console.log(formatSlotTable(await slotStatus()));
+    const r = resolveIndexSlotDetailed();
+    if (r.warning) console.log(`⚠ ${r.warning}`);
+    return;
+  }
+  if (positionals.length > 0) throw new Error(`usage: memory index slots   (unknown argument '${positionals[0]}')`);
+  if (values.activate !== undefined) {
+    const { activateSlot } = await import("./slot-build.js");
+    const r = await activateSlot(values.activate);
+    if (!r.changed) {
+      console.log(`✓ '${r.active.slot}' is already the active slot`);
+      return;
+    }
+    const rollback = r.active.previous ? ` (previous: ${r.active.previous} — roll back with: index --activate previous)` : "";
+    console.log(`✓ active slot: ${r.active.slot}${rollback}`);
+    return;
+  }
+  if (values.prune) {
+    const { pruneSlots } = await import("./slot-build.js");
+    const r = await pruneSlots({ confirm: Boolean(values.confirm) });
+    // Printed before the "nothing to prune" line too: a build in flight is the
+    // one reason a directory the user can see is deliberately left alone.
+    for (const k of r.kept) if (k.startsWith("in-progress build ")) console.log(`kept: ${k}`);
+    if (r.removed.length === 0) {
+      console.log(`(nothing to prune — only the active slot '${r.active}' exists)`);
+      return;
+    }
+    for (const x of r.removed) {
+      const what = x.interrupted ? `interrupted build '${x.slot}'` : `slot '${x.slot}'`;
+      console.log(`${r.confirmed ? "✓ removed" : "would remove"} ${what}: ${x.paths.map(rel).join(", ")}`);
+    }
+    if (r.confirmed) {
+      console.log(`kept active slot '${r.active}'; sidecars untouched`);
+      return;
+    }
+    console.error(`\nnothing was deleted — re-run with --confirm (the active slot '${r.active}' and the judgment sidecars are never touched)`);
+    process.exitCode = 2;
+    return;
+  }
+  if (values.confirm) throw new Error("usage: --confirm applies only to: memory index --prune --confirm");
+  if (values.build !== undefined) {
+    // A build always writes every row into a fresh directory, so there is
+    // nothing for these two to mean here — and silently ignoring them would
+    // let `index --build next --reembed` look like it re-embedded the corpus.
+    const stray = [...(values.rebuild ? ["--rebuild"] : []), ...(values.reembed ? ["--reembed"] : [])];
+    if (stray.length > 0) {
+      throw new Error(
+        `usage: ${stray.join(" and ")} ${stray.length > 1 ? "apply" : "applies"} only to a sync of the active slot: memory index [--rebuild] [--reembed]   (a build writes every row anyway; pass --force to replace an already-built slot)`,
+      );
+    }
+    const { buildSlot, formatBuildReport } = await import("./slot-build.js");
+    const r = await buildSlot({ name: values.build || undefined, dryRun: Boolean(values["dry-run"]), force: Boolean(values.force) });
+    if (r.skipped === "already-built") {
+      console.log(
+        `✓ slot '${r.slot}' is already built — rebuild it with: npx tsx src/cli.ts index --build ${r.slot} --force`,
+      );
+      return;
+    }
+    console.log(`${r.dryRun ? "(dry run) would build" : "✓ built"} slot '${r.slot}' — ${formatBuildReport(r)}`);
+    // The slot is built but not activated: `--index-slot` reads it for one
+    // command (MEMORY_INDEX_SLOT=<name> does the same for every command).
+    if (!r.dryRun) {
+      console.log(`  try it: npx tsx src/cli.ts recall "…" --index-slot ${r.slot}`);
+      console.log(`  activate it later with: npx tsx src/cli.ts index --activate ${r.slot}`);
+    }
+    return;
+  }
+  if (values["dry-run"]) throw new Error("usage: --dry-run applies only to: memory index --build <slot> [--dry-run]");
+  const stats = await syncIndex({ force: Boolean(values.force || values.reembed), rebuild: Boolean(values.rebuild) });
   console.log(
     `✓ index synced — ${stats.added} (re)embedded, ${stats.removed} removed, ${stats.unchanged} unchanged`,
   );
+  // The active slot is stats.slots[0]; the rest are the other built slots,
+  // kept in step so a slot under evaluation never drifts from the source.
+  for (const s of stats.slots.slice(1)) {
+    console.log(
+      s.error
+        ? `  ↻ slot ${s.slot} sync failed: ${s.error}`
+        : `  ↻ synced slot ${s.slot} (+${s.added} changed, ${s.removed} removed)`,
+    );
+  }
+  if (values.optimize) {
+    const { optimizeIndex } = await import("./store.js");
+    const r = await optimizeIndex(7, { headerBatch: positiveInt(values["header-batch"], 500, "--header-batch") });
+    // `fts a/b`: a of b catalog rows are folded into the full-text index.
+    const slots = r.slots
+      .map((s) =>
+        s.error
+          ? `${s.slot} (failed: ${s.error})`
+          : `${s.slot}${s.fts ? ` (fts ${s.fts.indexed}/${s.fts.indexed + s.fts.unindexed})` : ""}`,
+      )
+      .join(", ");
+    console.log(
+      `✓ optimized — headers backfilled ${r.headers.embedded}, ${r.headers.remaining} remaining${r.headers.remaining ? " (run again to continue)" : ""} · slots ${slots}`,
+    );
+  }
 }
 
 async function cmdQuery(argv: string[]) {
@@ -525,9 +656,13 @@ async function cmdQuery(argv: string[]) {
       graph: { type: "string" },
       k: { type: "string", short: "k" },
       deep: { type: "boolean" },
+      "no-cutoff": { type: "boolean" },
+      rerank: { type: "boolean" },
+      "index-slot": { type: "string" },
     },
     allowPositionals: true,
   });
+  applyIndexSlotFlag(values);
   // Each positional is its own query phrasing; all are fused. Quote each one.
   const queries = positionals.map((q) => q.trim()).filter(Boolean);
   if (queries.length === 0) {
@@ -537,7 +672,11 @@ async function cmdQuery(argv: string[]) {
   }
   const deep = Boolean(values.deep);
   const k = values.k ? Number(values.k) : deep ? 40 : 8;
-  const hits = await search(queries, filtersFrom(values), k, { deep });
+  const hits = await search(queries, await filtersFrom(values), k, {
+    deep,
+    noCutoff: Boolean(values["no-cutoff"]),
+    ...(values.rerank ? { rerank: true } : {}),
+  });
   if (hits.length === 0) {
     console.log("(no matches)");
     return;
@@ -598,6 +737,8 @@ function printRecallText(report: RecallReport, showQueries: boolean): void {
       console.log(`  sources: ${shown.join(", ")}${more > 0 ? `, … (+${more} more)` : ""}`);
     }
     for (const line of chainStatusLines(h.chain, h)) console.log(`  ${line}`);
+    if (h.digestOf?.length) console.log(`  ⊕ covers: ${h.digestOf.join(", ")}`);
+    if (h.coveredBy?.length) console.log(`  ⊕ digest: ${h.coveredBy.join(", ")}`);
     if (h.reasons?.matchedTerms.length) console.log(`  matched terms: ${h.reasons.matchedTerms.join(", ")}`);
     console.log(`  ${h.relPath}`);
     console.log(`  ${snippet}${snippet.length >= 220 ? "…" : ""}`);
@@ -623,11 +764,16 @@ async function cmdRecall(argv: string[]) {
       "require-complete": { type: "boolean" },
       "no-complete": { type: "boolean" },
       "no-expand": { type: "boolean" },
+      "no-cutoff": { type: "boolean" },
+      rerank: { type: "boolean" },
+      "no-rerank": { type: "boolean" },
       "show-queries": { type: "boolean" },
       shallow: { type: "boolean" },
+      "index-slot": { type: "string" },
     },
     allowPositionals: true,
   });
+  applyIndexSlotFlag(values);
   const queries = positionals.map((q) => q.trim()).filter(Boolean);
   if (queries.length === 0) {
     throw new Error(
@@ -638,13 +784,18 @@ async function cmdRecall(argv: string[]) {
   if (format !== "text" && format !== "json") throw new Error("--format must be one of: text, json");
 
   const report = await recall(queries, {
-    filters: filtersFrom(values),
+    filters: await filtersFrom(values),
     k: positiveInt(values.k, 40, "-k"),
     deep: !values.shallow,
     noExpand: Boolean(values["no-expand"]),
+    noCutoff: Boolean(values["no-cutoff"]),
+    ...(values.rerank ? { rerank: true } : values["no-rerank"] ? { rerank: false } : {}),
     completeness: recallCompleteness(values),
     completeLimit: positiveInt(values["complete-limit"], 200, "--complete-limit"),
     requireComplete: Boolean(values["require-complete"]),
+    // Named explicitly as well as via the env, so the reported `index` names
+    // the flag's slot even if something later unset MEMORY_INDEX_SLOT.
+    ...(values["index-slot"] ? { slot: values["index-slot"] as string } : {}),
   });
 
   if (format === "json") console.log(JSON.stringify(report, null, 2));
@@ -665,11 +816,13 @@ async function cmdList(argv: string[]) {
       until: { type: "string" },
       graph: { type: "string" },
       limit: { type: "string" },
+      "index-slot": { type: "string" },
     },
   });
-  const all = await loadAllEntries();
-  const chainIndex = buildChainIndex(all);
-  const entries = applyFilters(all, filtersFrom(values)).sort(
+  applyIndexSlotFlag(values);
+  const catalog = await openCatalog();
+  const chainIndex = buildChainIndex(await catalog.linked());
+  const entries = (await catalog.filter(await filtersFrom(values))).sort(
     (a, b) => b.date.localeCompare(a.date),
   );
   const limit = values.limit ? Number(values.limit) : entries.length;
@@ -682,17 +835,19 @@ async function cmdList(argv: string[]) {
 async function cmdPerson(argv: string[]) {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { graph: { type: "string" } },
+    options: { graph: { type: "string" }, "index-slot": { type: "string" } },
     allowPositionals: true,
   });
-  const slug = positionals[0];
-  if (!slug || positionals.length !== 1) throw new Error("usage: memory person <slug> [--graph <name>]");
+  const given = positionals[0];
+  if (!given || positionals.length !== 1) throw new Error("usage: memory person <slug-or-name> [--graph <name>]");
+  applyIndexSlotFlag(values);
+  const slug = (await (await import("./people-cli.js")).resolvePersonArg(given))!;
   const graph = values.graph ? requireGraph(values.graph) : undefined;
-  const all = await loadAllEntries();
-  const chainIndex = buildChainIndex(all);
-  const entries = all
-    .filter((e) => e.people.includes(slug) && (!graph || e.graphs.includes(graph)))
-    .sort((a, b) => b.date.localeCompare(a.date));
+  const catalog = await openCatalog();
+  const chainIndex = buildChainIndex(await catalog.linked());
+  const entries = (await catalog.filter({ person: slug, ...(graph ? { graph } : {}) })).sort(
+    (a, b) => b.date.localeCompare(a.date),
+  );
   if (entries.length === 0) {
     console.log(`(no memories mention '${slug}')`);
     return;
@@ -751,7 +906,7 @@ async function cmdDigest(argv: string[]) {
     // id so it never collides with the private digest of the same scope.
     id = id.replace(/^summary-/, `summary-${digestGraph}-`);
   }
-  const raw = applyFilters(await loadAllEntries(), scope)
+  const raw = (await (await openCatalog()).filter(scope))
     .filter((e) => e.type !== "summary")
     .sort((a, b) => a.date.localeCompare(b.date));
 
@@ -826,7 +981,7 @@ async function cmdPromote(argv: string[]) {
     if (!values.to) throw new Error("--to <graph> is required — memory graphs list shows the registry");
     const graph = requireGraph(values.to as string);
     if (graph === DEFAULT_GRAPH) throw new Error("promotion targets a shared graph — the default graph is the source");
-    const entries = await loadAllEntries();
+    const entries = await (await openCatalog()).all();
     const candidates = promotionCandidates(entries, await readPromotionDismissals(), {
       graph,
       since: values.since as string | undefined,
@@ -879,12 +1034,14 @@ async function cmdRules(argv: string[]) {
       console.log("(no rules configured — memory/graphs/rules.json)");
       return;
     }
-    const entries = await loadAllEntries();
+    const entries = await (await openCatalog()).all();
     for (const r of rules) {
       const match = [r.match.tag ? `tag #${r.match.tag}` : "", r.match.type ? `type ${r.match.type}` : ""]
         .filter(Boolean)
         .join(" + ");
-      const n = entries.filter((e) => e.graphs.includes(DEFAULT_GRAPH) && matchRule(e, r)).length;
+      const n = entries.filter(
+        (e) => e.graphs.includes(DEFAULT_GRAPH) && matchRule({ tags: e.tags, type: e.type }, r),
+      ).length;
       console.log(`● ${match}  →  ${r.graph}  (${r.mode})   matches ${n} private entr${n === 1 ? "y" : "ies"}`);
     }
     return;
@@ -975,7 +1132,7 @@ async function cmdSlugsList(argv: string[]) {
   const kind = requireSlugKind(values.kind);
   const minCount = positiveInt(values["min-count"], 1, "--min-count");
 
-  const entries = await loadAllEntries();
+  const entries = await (await openCatalog()).all();
   const usage = slugUsage(entries, kind).filter((s) => s.count >= minCount);
   for (const s of usage) {
     console.log(`${String(s.count).padStart(4)}  ${s.slug}  (last seen ${s.lastSeen ?? "n/a"})`);
@@ -1150,15 +1307,22 @@ Usage:
   memory graphs delete <slug> --confirm  # PERMANENT: blocked while entries exist only there; user must approve
   memory rules [list]                  # standing distribution rules (memory/graphs/rules.json)
   memory rules apply [--dry-run]       # reconcile all rules against existing private entries
-  memory index [--force]
-  memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep]
+  memory index [--force|--reembed] [--rebuild] [--optimize [--header-batch N]]   # --rebuild: rebuild the synced slots' catalog/lexical tables reusing vectors; --reembed (= --force): drop and re-embed; --optimize compacts + backfills title vectors (memory_headers) in bounded batches
+  memory index --build [<slot>] [--dry-run] [--force]       # build a complete new-format index beside the current one (vectors reused; never activates)
+            # the slot name defaults to 'next' (or 'main' when the store has no index at all)
+  memory index --activate <slot|previous>                   # switch the active slot (writes .index/active.json; the old one is kept as 'previous')
+  memory index --prune [--confirm]                          # delete non-active slots' derived artifacts (never sidecars; plan only without --confirm)
+  memory index slots                                        # status table: name, format, state, entries, chunks, last sync
+  memory query "<question>" ["<alt phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph <name>] [-k N] [--deep] [--no-cutoff] [--index-slot <name>]
             # each quoted positional is a separate phrasing; all are fused (2-4 recommended)
             # --deep: recall-over-precision preset (k=40, wider candidate pool)
-  memory recall "<question>" ["<agent phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph G] [-k N]
-            [--complete | --complete-if-small | --no-complete] [--require-complete] [--no-expand] [--format text|json]
+  memory recall "<question>" ["<agent phrasing>" …] [--person X] [--type Y] [--since DATE] [--until DATE] [--graph G] [-k N] [--index-slot <name>]
+            [--complete | --complete-if-small | --no-complete] [--require-complete] [--no-expand] [--no-cutoff] [--rerank|--no-rerank] [--format text|json]
+            # --rerank: opt-in second pass through a local cross-encoder (MEMORY_RERANK=1 to default on; ~1-2 s, one-time model download)
             # first phrasing is primary; extras are agent-supplied; CLI adds deterministic expansions unless --no-expand
             # default: k=40, deep pools, complete-if-small (limit 200)
             # --graph <name> scopes to one graph's members; default searches ALL (shared memberships labeled)
+            # --index-slot <name>: query another built index slot (A/B before \`index --activate\`); MEMORY_INDEX_SLOT=<name> does the same
   memory list [--person|--type|--team|--tag|--since|--until|--graph|--limit]
   memory person <slug> [--graph <name>]
   memory digest --person <slug> | --quarter <YYYY-Qn> | --tag <slug> [--graph <name>]
@@ -1175,6 +1339,15 @@ Usage:
   memory promote candidates [--to <graph>] [--since DATE] [--until DATE] [--limit N]
             # private entries awaiting promotion review for <graph> (default public)
   memory promote dismiss <id> [--graph <name>] [--reason "…"]   # record "not for that graph" — hidden until content changes
+  memory people alias <slug> --add "Name" [--add "Nick"] [--remove "Name"] [--display "Full Name"] [--create]
+            # nicknames/display names for a person slug (memory/people/<slug>.md, private store only);
+            # questions and --person then resolve "Zhenya" → evgenia-ivanova
+  memory people list [--min-count N] | people show <slug-or-name>
+  memory eval add-golden "<query>" ["<agent phrasing>" …] --expect <id,…> [filters] [--must-outrank <winner>:<loser>]… [--absent <id,…>]
+            # save a user-confirmed retrieval expectation to the private golden set (memory/eval/golden.json)
+  memory eval list | eval remove-golden <id>
+  memory eval run [--compare] [--baseline <path>] [--save-baseline] [--json <out>] [--only <id-prefix>]
+            # score the live store against the golden set; --compare (vs memory/eval/baseline.json) exits 2 on regression
   memory connectors                  # list + validate connectors/<name>.md (fetch config + extraction prompt per source)
   memory connectors mark-pulled <name> [--at ISO_TIMESTAMP]
             # record that a connector sweep completed; captures are recorded by memory add
@@ -1204,6 +1377,8 @@ async function main() {
     case "slugs": return cmdSlugs(rest);
     case "connectors": return cmdConnectors(rest);
     case "promote": return cmdPromote(rest);
+    case "eval": return (await import("./eval-cli.js")).cmdEval(rest);
+    case "people": return (await import("./people-cli.js")).cmdPeople(rest);
     case "ui": return cmdUi(rest);
     case undefined:
     case "help":
