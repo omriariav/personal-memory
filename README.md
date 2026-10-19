@@ -28,6 +28,18 @@ npm start
 
 `npm start` opens the local UI at `http://127.0.0.1:4664`.
 
+To start and stop the UI server from any terminal, link the `memui` helper onto
+your `PATH`:
+
+```bash
+ln -s "$PWD/scripts/memui.sh" ~/.local/bin/memui
+memui            # interactive menu: start / stop / restart / open / logs
+memui status     # or: start | stop | restart | open | logs | home
+```
+
+The server runs in the background (logs in `~/.cache/memui/`). `MEMORY_HOME`
+picks the store and `MEMUI_PORT` the port.
+
 ## Use It
 
 Open Claude Code or Codex with this repository as the working directory, then
