@@ -35,6 +35,12 @@ else
   B=''; G=''; R=''; Y=''; D=''; N=''
 fi
 
+if ! command -v lsof >/dev/null; then
+  echo "memui needs lsof to find the server process." >&2; exit 1
+fi
+
+usage() { echo "usage: memui [start|stop|restart|status|open|logs|home]"; }
+
 # PID listening on the port, empty if none.
 port_pid() { lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null | head -1; }
 
@@ -65,17 +71,28 @@ start() {
     echo "${R}No memory store at $MEM_DIR — set MEMORY_HOME.${N}"; return 1
   fi
   mkdir -p "$STATE_DIR"
-  (
+  local launcher
+  launcher="$(
     cd "$MEM_DIR" || exit 1
     if [ -s "$HOME/.nvm/nvm.sh" ]; then
       # shellcheck disable=SC1091
       source "$HOME/.nvm/nvm.sh" && nvm use 20 >/dev/null
     fi
-    nohup npx tsx src/cli.ts ui --port "$PORT" --no-open >"$LOG_FILE" 2>&1 &
-  )
+    # Job control puts the server in its own process group, so a Ctrl+C in
+    # this terminal (e.g. leaving `logs`) never reaches it.
+    set -m
+    nohup npx tsx src/cli.ts ui --port "$PORT" --no-open >"$LOG_FILE" 2>&1 </dev/null &
+    echo $!
+  )"
   printf "Starting"
   for _ in $(seq 1 40); do
-    if curl -s -o /dev/null "$URL"; then echo; echo "${G}Started${N} → $URL"; return 0; fi
+    pid="$(port_pid)"
+    if [ -n "$pid" ] && is_memory_server "$pid"; then
+      echo; echo "${G}Started${N} → $URL"; return 0
+    fi
+    if [ -z "$launcher" ] || ! kill -0 "$launcher" 2>/dev/null; then
+      echo; echo "${R}Server exited during startup — see $LOG_FILE${N}"; return 1
+    fi
     printf "."; sleep 0.5
   done
   echo; echo "${R}Didn't come up in 20s — see $LOG_FILE${N}"; return 1
@@ -90,13 +107,17 @@ stop() {
   kill "$pid" 2>/dev/null
   for _ in $(seq 1 10); do [ -z "$(port_pid)" ] && break; sleep 0.3; done
   pid="$(port_pid)"
-  [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
+  if [ -n "$pid" ]; then
+    kill -9 "$pid" 2>/dev/null; sleep 0.3
+    if [ -n "$(port_pid)" ]; then echo "${R}Couldn't stop pid $pid.${N}"; return 1; fi
+  fi
   echo "${G}Stopped.${N}"
 }
 
 open_ui() {
   start || return 1
-  if command -v open >/dev/null; then open "$URL"; else xdg-open "$URL" >/dev/null 2>&1; fi
+  # Not `command -v open`: on Debian `open` can be openvt.
+  if [ "$(uname)" = Darwin ]; then open "$URL"; else xdg-open "$URL" >/dev/null 2>&1; fi
 }
 
 logs() {
@@ -139,7 +160,7 @@ case "${1:-}" in
   open) open_ui ;;
   logs) logs ;;
   home) echo "$MEM_DIR" ;;
-  "") [ -t 0 ] && menu || { echo "usage: memui [start|stop|restart|status|open|logs|home]"; exit 1; } ;;
-  -h|--help) echo "usage: memui [start|stop|restart|status|open|logs|home]" ;;
-  *) echo "usage: memui [start|stop|restart|status|open|logs|home]" >&2; exit 1 ;;
+  "") if [ -t 0 ]; then menu; else usage; exit 1; fi ;;
+  -h|--help) usage ;;
+  *) usage >&2; exit 1 ;;
 esac

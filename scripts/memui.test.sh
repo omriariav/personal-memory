@@ -5,7 +5,7 @@
 
 set -uo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 memui="$repo_root/scripts/memui.sh"
 tmp="$(mktemp -d)"
 trap '[ -n "${foreign_pid:-}" ] && { kill "$foreign_pid"; wait "$foreign_pid"; } 2>/dev/null; rm -rf "$tmp"' EXIT
