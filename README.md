@@ -386,6 +386,14 @@ npx tsx src/cli.ts index --activate previous     # roll back any time
 npx tsx src/cli.ts index --prune --confirm       # once satisfied: drop the non-active slots' derived artifacts
 ```
 
+**Fresh stores start on the new format.** A tree with no `.index/` at all is
+built straight into `.index/slots/main/` (no `active.json`, no legacy root),
+so its `meta.json` lives at `.index/slots/main/meta.json`, not `.index/meta.json`.
+Anything that embeds the CLI should not poll the root file: ask `memory index
+slots`, `memory maintenance`, or `indexStatus()` (which report the resolved
+slot and whether it is built) instead of a fixed path. Only stores that already
+had a legacy root keep it as the default until a slot is activated.
+
 The gain is on the READ path. Writers still parse every entry through the
 root parse cache, and the `files` table has no reader yet, so `add` costs the
 same on a new-format slot as on the legacy one; a scoped writer sync that

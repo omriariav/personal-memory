@@ -159,7 +159,9 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   `memory` + `memory_headers` tables plus an `entries` table (one row per entry:
   metadata, a pre-tokenized `lex` column, `len`, `chunks`) and a `files` table,
   with `meta.json {format: 2, …}` and `catalog-manifest.json`. `.index/active.json`
-  `{slot, previous}` names the active one; absent means the legacy root. A read
+  `{slot, previous}` names the active one; absent means the legacy root when
+  one exists, else the fresh `main` slot (a store with no `.index/` is built
+  straight into `slots/main/`, so its `meta.json` is never at the root). A read
   picks its slot by `--index-slot <name>` → `MEMORY_INDEX_SLOT` → `active.json`
   → default, and refuses a new-format slot with no index built rather than
   answering from nothing. The judgment sidecars (connector timestamps, the
