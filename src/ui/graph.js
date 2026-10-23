@@ -16,6 +16,7 @@ import { comboboxHtml, wireCombobox } from "./combobox.js";
 import {
   KINDS,
   buildGraph,
+  defaultMode,
   entryGraphs,
   esc,
   labelSet,
@@ -108,6 +109,11 @@ export function renderGraphView(mainEl, entries, opts = {}) {
     gstate.graph = graph;
     gstate.lastPos = new Map();
     gstate.selected = null;
+    // A shared graph opens on topics, the default graph on people. Only an
+    // actual graph change resets this, so a mode the user picked survives
+    // route switches back to the same graph.
+    gstate.mode = defaultMode(graph);
+    gstate.types = presetTypes(gstate.mode);
   }
   if (entries.length === 0) {
     mainEl.innerHTML = `<div class="empty">the record is empty — log a first memory with <code>memory add</code> or <code>/remember</code>, then run <code>memory index</code></div>`;

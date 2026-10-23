@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildGraph,
+  defaultMode,
   entryGraphs,
   labelSet,
   modeLabel,
@@ -203,6 +204,20 @@ test("presetTypes and modeLabel agree with the three mode buttons", () => {
   assert.deepEqual(presetTypes("topics"), { person: false, tag: true, team: false, entry: false });
   assert.deepEqual(presetTypes("entries"), { person: true, tag: false, team: false, entry: true });
   assert.equal(modeLabel("custom"), "custom");
+});
+
+test("a shared graph opens on topics, the default graph on people", () => {
+  assert.equal(defaultMode("default"), "people");
+  assert.equal(defaultMode("team-x"), "topics");
+  assert.equal(defaultMode("another-graph"), "topics");
+  // the opening view must actually show what the mode promises, and must be
+  // one of the three the button row can render
+  assert.equal(presetTypes(defaultMode("team-x")).tag, true, "a shared graph opens showing tags");
+  assert.equal(presetTypes(defaultMode("team-x")).person, false, "a shared graph does not open on people");
+  assert.equal(presetTypes(defaultMode("default")).person, true, "the default graph opens showing people");
+  for (const g of ["default", "team-x"]) {
+    assert.notEqual(modeLabel(defaultMode(g)), "custom", "the opening mode must map to a button");
+  }
 });
 
 test("trunc keeps short labels whole and ellipsizes long ones to n chars", () => {

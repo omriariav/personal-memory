@@ -83,6 +83,15 @@ export function presetTypes(mode) {
   return { person: true, tag: false, team: true, entry: true };
 }
 
+/** The view a graph opens on. A shared graph is subject matter by
+ * construction — it exists to explain topics to an audience — so it leads with
+ * topics. The default graph is the personal record, where people are the way
+ * in. An explicit choice still wins; this only sets the opening view.
+ * @param {string} graph @returns {Exclude<GraphMode, "custom">} */
+export function defaultMode(graph) {
+  return graph === "default" ? "people" : "topics";
+}
+
 /** @param {GraphMode} mode */
 export function modeLabel(mode) {
   return mode === "people" ? "people" : mode === "topics" ? "topics" : mode === "entries" ? "entries" : "custom";
