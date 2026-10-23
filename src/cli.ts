@@ -900,8 +900,8 @@ async function cmdDigest(argv: string[]) {
     title = `Rolling summary — ${quarter}`;
   }
 
-  if (digestGraph === "public") {
-    scope = { ...scope, graph: "public" };
+  if (digestGraph !== DEFAULT_GRAPH) {
+    scope = { ...scope, graph: digestGraph };
     // Ids are unique across ALL stores — a shared-graph digest gets its own
     // id so it never collides with the private digest of the same scope.
     id = id.replace(/^summary-/, `summary-${digestGraph}-`);
