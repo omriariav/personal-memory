@@ -1,6 +1,6 @@
 ---
 name: morning-brief
-description: Use when the user asks for their morning brief, "/morning-brief", "brief me on today", "what's my day", or "catch me up for today" — a terminal-text brief of today's calendar, what needs them, per-meeting prep grounded in personal memory, open loops, and new captures. Read-only: it proposes, the user decides.
+description: Use when the user asks for their morning brief, "/morning-brief", "brief me on today", "what's my day", or "catch me up for today" — a terminal-text brief of today's calendar, what needs them, per-meeting prep grounded in personal memory, open loops, and new captures. Read-only; it proposes, the user decides.
 ---
 
 # Morning brief
@@ -8,16 +8,35 @@ description: Use when the user asks for their morning brief, "/morning-brief", "
 A 60-second terminal read that starts the day oriented. Plain text in chat —
 no HTML, no artifact, no files written.
 
-Everything is **store-relative** (see `skills/recall-memory/SKILL.md` →
-"Locating the store"). Memory discovery follows the recall rules: ONLY through
-`npx tsx src/cli.ts recall|person|list` — never grep/ls/cat over `memory/`.
+## Locating the store
+
+Everything in this skill is **store-relative** — not just the
+`npx tsx src/cli.ts …` commands (the CLI resolves the store from its working
+directory), but every path involved: `memory/…` files (including
+`memory/morning.md`) and the entry paths that CLI output cites.
+
+- Working inside the personal-memory repo already (`src/cli.ts` and
+  `connectors/` present)? Run the commands and read the paths as written.
+- Installed via the plugin marketplace and working in another project?
+  `MEMORY_HOME` must point at the user's personal-memory clone. Run every
+  command as `cd "$MEMORY_HOME" && npx tsx src/cli.ts …`, and resolve every
+  store-relative file you read under it too — `$MEMORY_HOME/memory/morning.md`,
+  entry paths printed by the CLI, and git checks as
+  `git -C "$MEMORY_HOME/memory" …`.
+- Neither? Ask the user where their personal-memory clone lives and suggest
+  exporting `MEMORY_HOME` in their shell profile.
+
+Memory discovery follows the recall rules: ONLY through
+`npx tsx src/cli.ts recall|person|list` (prefixed as above when installed) —
+never grep/ls/cat over `memory/`.
 
 ## 0. Load the private override
 
-If `memory/morning.md` exists, Read it first. It lists the user's own extra
+If `memory/morning.md` (`$MEMORY_HOME/memory/morning.md` when installed) exists, Read it first. It lists the user's own extra
 sources (calendar cache, chat inbox, task tracker, working-state lists),
 their home timezone and working week. It **adds to** this skill; on conflict
-the override wins. No override → memory + whatever calendar tool is
+the override wins, except the repo's discovery/capture rules (CLI-only,
+add-only), which always apply. No override → memory + whatever calendar tool is
 connected.
 
 ## 1. Gather (parallel, read-only)
@@ -36,7 +55,9 @@ npx tsx src/cli.ts list --since <since-date> --limit 200
 ```
 
 `<since-date>` = the previous working day (per the override's working week;
-default Mon–Fri). Keep only `[open]` rows from the first two — `[resolved → id]`
+default Mon–Fri). `list --since` filters on first-seen `date`, so entries
+refreshed in place won't show as new. `--limit 200` can truncate: compare
+against the CLI's total count line and say so in the brief if truncated. Keep only `[open]` rows from the first two — `[resolved → id]`
 is settled.
 
 **Override sources** — each one exactly as the override describes.
@@ -71,21 +92,28 @@ nothing in memory".
   - a "booked/scheduled …" todo whose date has passed,
   - an item whose meeting/deadline is in the past,
   - test/placeholder titles ("Test"),
-  - anything open > 14 days with no newer entry on the same matter.
+  - anything open > 14 days with no newer entry on the same matter (these
+    go here only, never into NEEDS YOU / OPEN LOOPS).
   - **settled outside memory** — a closed item in an override source
     (chat thread done, task ticked) covers the same matter. Name that
     evidence as the reason ("Jane: 'done' in DM, 22 Oct").
   Show them anyway (the user asked to see them), numbered, one line each with
   the reason. Never resolve them yourself.
+- **Resolved** — matters that closed since `<since-date>`: entries that
+  settle an earlier one (`resolved by` / `--follows`), closed override-source
+  items with an outcome. Not numbered; nothing to act on.
+- **New in memory** — captures since `<since-date>`, grouped by type, titles
+  only; flag anything that is itself an ask of the user.
 
 **Cap: at most 10 things to handle.** NEEDS YOU + OPEN LOOPS together show
 ≤10 items, after duplicates are merged, groups are collapsed and snoozed
-items are hidden. Rank them: priorities first, then due today, then due
+items are hidden (priorities and snoozes come from the override's triage
+source, if any — the CLI has no such fields). Rank them: priorities first, then due today, then due
 soonest. If more than 10 remain, the graph is unhealthy, not the week: show
 the top 10, then one line, `⚠ GRAPH: <N> open items, cap is 10`, plus the
 likely causes with counts (unsettled todos with no `--follows` link,
-duplicates, booking trackers saved as todos, items with nothing newer for
-over 14 days). Offer a cleanup pass. Never print the overflow as a list.
+duplicates, booking trackers saved as todos). Stale items moved to PROBABLY
+DONE are reported separately and not counted in the cap. Offer a cleanup pass. Never print the overflow as a list.
 PROBABLY DONE, RESOLVED and NEW IN MEMORY don't count toward the cap.
 
 **Duplicates — always raise them.** Before writing, group open items that
@@ -94,18 +122,13 @@ are the same matter (same feature/person/task worded differently, e.g. an
 also sits in an override source like a task list). Show the group ONCE (the
 most specific wording) with a `(dup: <other id/date>)` marker, and offer
 "merge N" → settle the extras with one `add --follows <extra ids>` note
-pointing at the kept entry.
+(list ONLY the extra ids — any follower resolves an open item; name the kept
+id in `--body`).
 
 **Cross-check before placing any open item or reminder in NEEDS YOU / OPEN
 LOOPS:** look for evidence in the override sources (including their *closed*
 items) that the matter already settled. A calendar reminder ("check X —
 approved?") or an `[open]` todo is not proof it is still open.
-- **Resolved** — matters that closed since `<since-date>`: entries that
-  settle an earlier one (`resolved by` / `--follows`), closed override-source
-  items with an outcome. Not numbered; nothing to act on.
-- **New in memory** — captures since `<since-date>`, grouped by type, titles
-  only; flag anything that is itself an ask of the user.
-
 Drop anything that fits nowhere. Don't repeat an item across sections.
 
 ## 4. Write (terminal text)
