@@ -52,6 +52,10 @@ const ENTRIES: SeedEntry[] = [
     body: "Share the deploy checklist in the thread.", source_ids: ["slack:C5:1700000500.1:1700000501.1"] },
   { id: "2026-01-06-thread-ask-b", date: "2026-01-06", type: "todo", title: "Book the retro room", people: ["ana-de-souza"],
     body: "Book a room for the retro.", source_ids: ["slack:C5:1700000500.1:1700000502.1"] },
+  { id: "2026-01-06-marketing-signoff", date: "2026-01-06", type: "todo", title: "Marketing budget sign-off", people: ["mark-levi"],
+    body: "Get the marketing budget signed off.", source_ids: ["slack:D4:1700000600.1"] },
+  { id: "2026-01-06-level-review", date: "2026-01-06", type: "todo", title: "Plan the offsite", people: ["mark-levi"],
+    body: "Plan the offsite agenda.", source_ids: ["slack:D4:1700000700.1"] },
   // Resolved todos about the expense must not crowd the open one out either.
   ...Array.from({ length: 50 }, (_, i): SeedEntry => ({
     id: `2026-01-01-expense-todo-${i}`, date: "2026-01-01", type: "todo", title: `Expense EX-1 approval todo ${i}`,
@@ -73,7 +77,8 @@ test("open: evidence, confidence, prefix rules, graphs, crowding, and settle gua
 
     // No flags: every open item of both open types, with graph membership.
     const all = open(root, []);
-    const MINE = [EXPENSE, READOUT, THREAD, VENDOR, "2026-01-06-thread-ask-a", "2026-01-06-thread-ask-b"];
+    const MINE = [EXPENSE, READOUT, THREAD, VENDOR, "2026-01-06-thread-ask-a", "2026-01-06-thread-ask-b",
+      "2026-01-06-marketing-signoff", "2026-01-06-level-review"];
     assert.deepEqual(all.items.map((r) => r.id).sort(), [...MINE].sort());
     assert.deepEqual(all.items.find((r) => r.id === VENDOR)?.graphs, ["default", "team-x"]);
 
@@ -88,6 +93,12 @@ test("open: evidence, confidence, prefix rules, graphs, crowding, and settle gua
     assert.equal(settled.items[0]?.confidence, "high");
     assert.ok(settled.items[0]?.evidence.query?.terms.length);
     assert.equal(settled.items.find((r) => r.id === READOUT)?.confidence, "candidate");
+    // With --source, the phrasing never pulls in items from other conversations.
+    assert.ok(settled.items.every((r) => r.evidence.source));
+
+    // Topic words that merely start like a name part ("market"/"mark") still count as topical.
+    const mkt = open(root, ["marketing budget approved", "--source", "slack:D4"]);
+    assert.deepEqual([mkt.items[0]?.id, mkt.items[0]?.confidence], ["2026-01-06-marketing-signoff", "high"]);
 
     // A person's name alone is not topical evidence: no item becomes high.
     assert.ok(open(root, ["Boris", "--source", "slack:D9"]).items.every((r) => r.confidence === "candidate"));
@@ -113,8 +124,8 @@ test("open: evidence, confidence, prefix rules, graphs, crowding, and settle gua
     // Graph scope and truncation reporting.
     assert.deepEqual(open(root, ["--graph", "team-x"]).items.map((r) => r.id), [VENDOR]);
     const limited = open(root, ["--limit", "1"]);
-    assert.deepEqual([limited.shown, limited.total], [1, 6]);
-    assert.match(cli(root, ["open", "--limit", "1"]), /1 of 6 open items/);
+    assert.deepEqual([limited.shown, limited.total], [1, 8]);
+    assert.match(cli(root, ["open", "--limit", "1"]), /1 of 8 open items/);
 
     // Settling by rewrite is refused: same anchor + retype, or following itself through the anchor.
     const retype = run(root, ["add", "--type", "note", "--title", "Staging answered", "--people", "ana-levi",
@@ -138,7 +149,8 @@ test("open: evidence, confidence, prefix rules, graphs, crowding, and settle gua
     cli(root, ["add", "--type", "decision", "--title", "Vendor A chosen", "--people", "ana-levi", "--date", "2026-01-07",
       "--body", "Chose vendor A.", "--follows", VENDOR, "--force-new"]);
     assert.deepEqual(open(root, []).items.map((r) => r.id).sort(),
-      [EXPENSE, READOUT, "2026-01-06-thread-ask-a", "2026-01-06-thread-ask-b"].sort());
+      [EXPENSE, READOUT, "2026-01-06-thread-ask-a", "2026-01-06-thread-ask-b",
+        "2026-01-06-marketing-signoff", "2026-01-06-level-review"].sort());
     assert.match(cli(root, ["open", "--graph", "team-x"]), /no matching open items/);
 
     // A wrong link is undone with unlink: the item is open again; unknown links are rejected.

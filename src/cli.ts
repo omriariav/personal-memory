@@ -201,18 +201,22 @@ async function cmdAdd(argv: string[]) {
 
   // An open item is settled by a NEW linked entry, never by rewriting it in
   // place (a thread's outcome shares the thread-root anchor with its todo).
-  if (target && entryStatus(target, buildChainIndex(await catalog.linked()))?.status === "open") {
+  if (target && OPEN_TYPES.has(target.type) &&
+    entryStatus(target, buildChainIndex(await catalog.linked()))?.status === "open") {
     const matched = values.update ? undefined : sourceIds.find((s) => (target!.source_ids ?? []).includes(s));
+    // Only Slack has a per-reply id to anchor an outcome on; other sources need their own message id.
+    const distinct = matched?.startsWith("slack:") ? `${matched}:<reply_ts>` : "the outcome message's own id";
     if ((values.type && values.type !== target.type) || list(values.follows as string).includes(target.id)) {
       throw new Error(
         `${matched ? `${matched} already anchors` : "--update targets"} the open ${target.type} ${target.id} — ` +
           `log the outcome as a new entry with --follows ${target.id}` +
-          (matched ? ` and a distinct source id (e.g. ${matched}:<reply_ts>)` : ""),
+          (matched ? ` and a distinct source id (${distinct})` : ""),
       );
     }
     if (matched) {
-      console.error(`  note: refreshing the open ${target.type} in place — if this capture reports its outcome, ` +
-        `log a new entry with --follows ${target.id} instead`);
+      // stdout, so sweeps that capture the CLI's output see it alongside the `↻ matches` line.
+      console.log(`  ⚠ refreshing the open ${target.type} in place — if this capture reports its outcome, ` +
+        `log a new entry with --follows ${target.id} (source id: ${distinct}) instead`);
     }
   }
 
@@ -964,6 +968,8 @@ async function cmdOpen(argv: string[]) {
         const terms = (h.reasons?.matchedTerms ?? []).filter((t) => asked.some((a) => a.startsWith(t) || t.startsWith(a)));
         // Exhaustive runs return every open item; only a lexical match or a top rank is evidence.
         if (terms.length === 0 && i >= OPEN_SEMANTIC_TOP) return;
+        // With --source the phrasing ranks the conversation's items; it doesn't add other conversations.
+        if (prefixes.length > 0 && !rows.has(h.id)) return;
         const r = row(byId.get(h.id)!);
         r.evidence.query = { rank: i + 1, score: Number(h.score.toFixed(4)), terms };
         if (h.bestChunk) r.snippet = h.bestChunk.slice(0, 240);
@@ -975,17 +981,16 @@ async function cmdOpen(argv: string[]) {
 
   const all = [...rows.values()];
   // A person's name matches every ask in their DM — it is not evidence about the matter.
-  // Terms are stemmed, so a name part may be longer than its term ("boris" → "boris", "levi" → "levi");
-  // short parts ("de") only count on equality so they can't swallow topical words.
+  // A term is a name only if it equals a name part or is its stem (at most 2 chars shorter):
+  // "market" is not "mark", "level" is not "levi", "deploy" is not "de".
   const isName = (t: string, part: string) =>
-    part === t || (t.length >= 4 && part.startsWith(t)) || (part.length >= 4 && t.startsWith(part));
+    part === t || (t.length >= 4 && part.startsWith(t) && part.length - t.length <= 2);
   const topical = (r: Row) => (r.evidence.query?.terms ?? []).some((t) =>
     !r.people.some((slug) => slug.split("-").some((part) => isName(t, part))));
   const both = all.filter((r) => r.evidence.source && topical(r));
   for (const r of all) {
     const q = r.evidence.query;
-    if (r.evidence.source?.scope === "exact" ||
-      (both.length === 1 && both[0] === r && q?.rank === 1)) r.confidence = "high";
+    if (r.evidence.source?.scope === "exact" || (both.length === 1 && both[0] === r && q)) r.confidence = "high";
   }
 
   // High confidence first, then source evidence, then matched terms, then per-type rank, then newest.
