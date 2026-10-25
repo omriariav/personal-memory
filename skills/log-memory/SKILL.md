@@ -132,6 +132,8 @@ the latest state instead of a stale one:
     matter resolved too.
 - **After the fact**: `npx tsx src/cli.ts link <later-id> --follows <earlier-id>`
   links two existing entries.
+- **Wrong link**: `npx tsx src/cli.ts unlink <later-id> --follows <earlier-id>`
+  removes it (never edit `follows` by hand) — then log the real outcome.
 - The CLI validates targets (must exist, not be newer, no cycles) and derives
   everything else at read time: an unresolved `pending-decision`/`todo` shows as
   `[open]`, a chained one as `[resolved → <id>]`, and recall annotates stale

@@ -438,6 +438,42 @@ export async function applyChainLink(opts: {
   };
 }
 
+/**
+ * Remove `follows` links from an existing entry — the undo for a link that
+ * was wrong (e.g. an outcome chained to an item it doesn't settle). The
+ * earlier entry regains `[open]` if nothing else follows it.
+ */
+export async function removeChainLink(opts: {
+  laterId: string;
+  follows: string[];
+  refreshAudit?: boolean;
+}): Promise<ChainLinkResult> {
+  const catalog = await openCatalogForWrite();
+  const entry = await requireEntry(catalog, opts.laterId);
+  const current = entry.follows ?? [];
+  const missing = opts.follows.filter((id) => !current.includes(id));
+  if (missing.length) throw new Error(`${entry.id} does not follow ${missing.join(", ")}`);
+  const kept = current.filter((id) => !opts.follows.includes(id));
+
+  const { body, path: _p, graphs, paths: _paths, follows: _f, ...rest } = entry;
+  const fm = FrontmatterSchema.parse({
+    ...rest,
+    ...(kept.length ? { follows: kept } : {}),
+    updated: new Date().toISOString().slice(0, 10),
+  }) as Frontmatter;
+  const written = await writeEntryAll(fm, body, graphs);
+  const path = written[DEFAULT_GRAPH] ?? Object.values(written)[0]!;
+  const index = await syncIndex();
+  let afterCommit = false;
+  for (const g of graphs) {
+    afterCommit =
+      (await commitMemoryRepo(`Unlink memory: ${entry.id} no longer follows ${opts.follows.join(", ")}`, storeFor(g).dir)) ||
+      afterCommit;
+  }
+  const audit = opts.refreshAudit === false ? undefined : await refreshGraphMaintenanceAudit();
+  return { laterId: entry.id, follows: kept, changed: true, path: rel(path), index, afterCommit, ...(audit ? { audit } : {}) };
+}
+
 export async function writeGraphMaintenanceAudit(audit: GraphMaintenanceAudit): Promise<void> {
   await mkdir(INDEX_DIR, { recursive: true });
   await writeFile(GRAPH_MAINTENANCE_PATH, JSON.stringify(audit, null, 2), "utf8");

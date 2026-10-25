@@ -140,6 +140,14 @@ test("open: evidence, confidence, prefix rules, graphs, crowding, and settle gua
     assert.deepEqual(open(root, []).items.map((r) => r.id).sort(),
       [EXPENSE, READOUT, "2026-01-06-thread-ask-a", "2026-01-06-thread-ask-b"].sort());
     assert.match(cli(root, ["open", "--graph", "team-x"]), /no matching open items/);
+
+    // A wrong link is undone with unlink: the item is open again; unknown links are rejected.
+    cli(root, ["add", "--type", "decision", "--title", "Unrelated decision", "--people", "boris-cohen", "--date", "2026-01-08",
+      "--body", "Something else entirely.", "--follows", EXPENSE, "--force-new"]);
+    assert.ok(!open(root, []).items.some((r) => r.id === EXPENSE));
+    cli(root, ["unlink", "2026-01-08-unrelated-decision", "--follows", EXPENSE]);
+    assert.ok(open(root, []).items.some((r) => r.id === EXPENSE));
+    assert.notEqual(run(root, ["unlink", "2026-01-08-unrelated-decision", "--follows", EXPENSE]).status, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

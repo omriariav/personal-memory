@@ -25,7 +25,7 @@ import {
 import { copyEntry, deleteGraph, moveEntry, removeEntry, syncGraphs } from "./membership.js";
 import { commitMemoryRepo } from "./memory-git.js";
 import { buildChainIndex, chainAncestry, entryStatus, OPEN_TYPES, validateFollowsTargets, type ChainAnnotation } from "./chains.js";
-import { applyChainLink, dismissSlugSuggestion, mergeSlugs, proposeSlugMerge, slugUsage, type SlugKind } from "./graph-maintenance.js";
+import { applyChainLink, dismissSlugSuggestion, removeChainLink, mergeSlugs, proposeSlugMerge, slugUsage, type SlugKind } from "./graph-maintenance.js";
 import { recall, type RecallReport } from "./recall.js";
 import { keywordPhrase } from "./recall-queries.js";
 import { resolveIndexSlotDetailed } from "./index-slots.js";
@@ -374,6 +374,23 @@ async function cmdLink(argv: string[]) {
   if (result.index) {
     console.log(`  indexed (+${result.index.added} changed, ${result.index.unchanged} unchanged)`);
   }
+}
+
+async function cmdUnlink(argv: string[]) {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: { follows: { type: "string" } },
+    allowPositionals: true,
+  });
+  const id = positionals[0];
+  const follows = list(values.follows as string);
+  if (!id || positionals.length !== 1 || follows.length === 0) {
+    throw new Error("usage: memory unlink <id> --follows <earlier-id,…>");
+  }
+  const result = await removeChainLink({ laterId: id, follows });
+  console.log(`✓ unlinked ${id} → no longer follows ${follows.join(", ")}` +
+    (result.follows.length ? ` (still follows ${result.follows.join(", ")})` : ""));
+  console.log(`  ${result.path}`);
 }
 
 async function cmdRemove(argv: string[]) {
@@ -1463,6 +1480,9 @@ Usage:
   memory link <id> --follows <earlier-id,…>
             # add timeline links to an existing entry (e.g. a decision settling a pending-decision)
             # containment is enforced: a shared-graph entry only references fellow members
+  memory unlink <id> --follows <earlier-id,…>
+            # remove wrong timeline links (an outcome chained to an item it doesn't settle);
+            # the earlier entry shows [open] again unless something else follows it
   memory remove <id>   # delete ALL of an entry's copies + sync index (content stays in each repo's history)
   memory copy <id> --to <graph>
             # add membership: materialize the entry into another graph (it stays private too);
@@ -1535,6 +1555,7 @@ async function main() {
   switch (cmd) {
     case "add": return cmdAdd(rest);
     case "link": return cmdLink(rest);
+    case "unlink": return cmdUnlink(rest);
     case "remove": return cmdRemove(rest);
     case "move": return cmdMove(rest);
     case "copy": return cmdCopy(rest);
