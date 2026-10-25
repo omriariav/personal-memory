@@ -1,0 +1,146 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { REPO, STORE_MOD, runInStore, seedStore, type SeedEntry } from "./test-store.js";
+
+function run(cwd: string, args: string[]): { status: number; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync(process.execPath, ["--import", join(REPO, "node_modules", "tsx", "dist", "loader.mjs"), join(REPO, "src", "cli.ts"), ...args], {
+      cwd,
+      env: { ...process.env, MEMORY_EMBEDDINGS: "fake", MEMORY_QUIET: "1" },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { status: 0, stdout, stderr: "" };
+  } catch (err) {
+    const e = err as { status: number; stdout: string; stderr: string };
+    return { status: e.status, stdout: e.stdout, stderr: e.stderr };
+  }
+}
+
+function cli(cwd: string, args: string[]): string {
+  const r = run(cwd, args);
+  assert.equal(r.status, 0, `${args.join(" ")} failed: ${r.stderr}`);
+  return r.stdout;
+}
+
+type Item = { id: string; graphs: string[]; confidence: string;
+  evidence: { source?: { id: string; scope: string }; query?: { rank: number; terms: string[] } } };
+
+function open(cwd: string, args: string[]): { total: number; shown: number; items: Item[] } {
+  return JSON.parse(cli(cwd, ["open", ...args, "--format", "json"]));
+}
+
+const EXPENSE = "2026-01-06-expense-ex-1-approval";
+const READOUT = "2026-01-06-readout-to-boris";
+const VENDOR = "2026-01-06-vendor-decision";
+const THREAD = "2026-01-06-thread-ask";
+
+const ENTRIES: SeedEntry[] = [
+  { id: EXPENSE, date: "2026-01-06", type: "todo", title: "Follow up on expense EX-1 approval", people: ["boris-cohen"],
+    body: "Waiting for Boris to approve expense EX-1 for the keyboard.", source_ids: ["slack:D9:1700000000.1"] },
+  { id: READOUT, date: "2026-01-06", type: "todo", title: "Send onboarding readout to Boris", people: ["boris-cohen"],
+    body: "Write the onboarding readout and share it.", source_ids: ["slack:D9:1700000100.1"] },
+  { id: VENDOR, date: "2026-01-06", type: "pending-decision", title: "Decide on the vendor contract", people: ["ana-levi"],
+    body: "Pick between the two vendor offers.", source_ids: ["slack:C7:1700000200.1"], graphs: ["default", "team-x"] },
+  { id: THREAD, date: "2026-01-06", type: "todo", title: "Answer the staging question", people: ["ana-levi"],
+    body: "Reply in the thread about staging.", source_ids: ["slack:C8:1700000300.1"] },
+  { id: "2026-01-06-thread-ask-a", date: "2026-01-06", type: "todo", title: "Send the deploy checklist", people: ["ana-de-souza"],
+    body: "Share the deploy checklist in the thread.", source_ids: ["slack:C5:1700000500.1:1700000501.1"] },
+  { id: "2026-01-06-thread-ask-b", date: "2026-01-06", type: "todo", title: "Book the retro room", people: ["ana-de-souza"],
+    body: "Book a room for the retro.", source_ids: ["slack:C5:1700000500.1:1700000502.1"] },
+  // Resolved todos about the expense must not crowd the open one out either.
+  ...Array.from({ length: 50 }, (_, i): SeedEntry => ({
+    id: `2026-01-01-expense-todo-${i}`, date: "2026-01-01", type: "todo", title: `Expense EX-1 approval todo ${i}`,
+    body: `Expense EX-1 approval keyboard ${i}.` })),
+  ...Array.from({ length: 50 }, (_, i): SeedEntry => ({
+    id: `2026-01-02-expense-todo-done-${i}`, date: "2026-01-02", type: "note", title: `Expense todo ${i} done`,
+    body: "Done.", follows: [`2026-01-01-expense-todo-${i}`] })),
+  // Non-open entries that share the expense vocabulary must not crowd the todo out of a query.
+  ...Array.from({ length: 100 }, (_, i): SeedEntry => ({
+    id: `2026-01-0${(i % 3) + 1}-expense-note-${i}`, date: `2026-01-0${(i % 3) + 1}`, type: "note",
+    title: `Expense EX-1 approval note ${i}`, body: `Expense EX-1 approval keyboard discussion ${i}.` })),
+];
+
+test("open: evidence, confidence, prefix rules, graphs, crowding, and settle guards", { timeout: 300_000 }, () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-cli-open-"));
+  try {
+    seedStore(root, ENTRIES);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+
+    // No flags: every open item of both open types, with graph membership.
+    const all = open(root, []);
+    const MINE = [EXPENSE, READOUT, THREAD, VENDOR, "2026-01-06-thread-ask-a", "2026-01-06-thread-ask-b"];
+    assert.deepEqual(all.items.map((r) => r.id).sort(), [...MINE].sort());
+    assert.deepEqual(all.items.find((r) => r.id === VENDOR)?.graphs, ["default", "team-x"]);
+
+    // A conversation-level prefix matches every open item in the DM — as candidates only.
+    const dm = open(root, ["--source", "slack:D9"]);
+    assert.deepEqual(dm.items.map((r) => r.id).sort(), [EXPENSE, READOUT].sort());
+    assert.ok(dm.items.every((r) => r.confidence === "candidate" && r.evidence.source?.scope === "conversation"));
+
+    // Adding a phrasing singles out the item it describes; the other DM item stays a candidate.
+    const settled = open(root, ["expense EX-1 approved", "--source", "slack:D9"]);
+    assert.equal(settled.items[0]?.id, EXPENSE);
+    assert.equal(settled.items[0]?.confidence, "high");
+    assert.ok(settled.items[0]?.evidence.query?.terms.length);
+    assert.equal(settled.items.find((r) => r.id === READOUT)?.confidence, "candidate");
+
+    // A person's name alone is not topical evidence: no item becomes high.
+    assert.ok(open(root, ["Boris", "--source", "slack:D9"]).items.every((r) => r.confidence === "candidate"));
+
+    // A query alone finds the todo despite 100 non-open entries ranking above it.
+    assert.equal(open(root, ["expense EX-1 approval keyboard"]).items[0]?.id, EXPENSE);
+
+    // A thread prefix is exact.
+    const thread = open(root, ["--source", "slack:C8:1700000300.1"]);
+    assert.deepEqual(thread.items.map((r) => [r.id, r.confidence, r.evidence.source?.scope]), [[THREAD, "high", "exact"]]);
+
+    // A thread holding two open asks is not an exact match for either.
+    assert.ok(open(root, ["--source", "slack:C5:1700000500.1"]).items.every((r) => r.confidence === "candidate"));
+    // A short name part ("de") doesn't disqualify topical words ("deploy").
+    const deploy = open(root, ["deploy checklist", "--source", "slack:C5"]);
+    assert.deepEqual([deploy.items[0]?.id, deploy.items[0]?.confidence], ["2026-01-06-thread-ask-a", "high"]);
+
+    // Prefix normalization: scheme case, trailing colon, ':' boundaries, bare scheme rejected.
+    assert.equal(open(root, ["--source", "Slack:D9:"]).items.length, 2);
+    assert.equal(open(root, ["--source", "slack:D"]).items.length, 0);
+    assert.notEqual(run(root, ["open", "--source", "slack"]).status, 0);
+
+    // Graph scope and truncation reporting.
+    assert.deepEqual(open(root, ["--graph", "team-x"]).items.map((r) => r.id), [VENDOR]);
+    const limited = open(root, ["--limit", "1"]);
+    assert.deepEqual([limited.shown, limited.total], [1, 6]);
+    assert.match(cli(root, ["open", "--limit", "1"]), /1 of 6 open items/);
+
+    // Settling by rewrite is refused: same anchor + retype, or following itself through the anchor.
+    const retype = run(root, ["add", "--type", "note", "--title", "Staging answered", "--people", "ana-levi",
+      "--body", "Answered.", "--source-ids", "slack:C8:1700000300.1"]);
+    assert.notEqual(retype.status, 0);
+    assert.match(retype.stderr, /already anchors the open todo .*distinct source id/);
+    const self = run(root, ["add", "--type", "note", "--title", "Staging answered", "--people", "ana-levi",
+      "--body", "Answered.", "--source-ids", "slack:C8:1700000300.1", "--follows", THREAD]);
+    assert.notEqual(self.status, 0);
+    assert.match(self.stderr, /already anchors the open todo/);
+
+    // --update can't retype an open item either; a resolved one still can be.
+    const upd = run(root, ["add", "--update", THREAD, "--type", "note", "--title", "Staging answered", "--body", "Answered."]);
+    assert.notEqual(upd.status, 0);
+    assert.match(upd.stderr, /--update targets the open todo/);
+    cli(root, ["add", "--update", "2026-01-01-expense-todo-0", "--type", "note", "--title", "Expense EX-1 note", "--body", "Retyped."]);
+
+    // The sanctioned path: a distinct reply anchor + --follows resolves it (a pending-decision too).
+    cli(root, ["add", "--type", "note", "--title", "Staging answered in thread", "--people", "ana-levi", "--date", "2026-01-07",
+      "--body", "Answered the staging question.", "--source-ids", "slack:C8:1700000300.1:1700000400.1", "--follows", THREAD]);
+    cli(root, ["add", "--type", "decision", "--title", "Vendor A chosen", "--people", "ana-levi", "--date", "2026-01-07",
+      "--body", "Chose vendor A.", "--follows", VENDOR, "--force-new"]);
+    assert.deepEqual(open(root, []).items.map((r) => r.id).sort(),
+      [EXPENSE, READOUT, "2026-01-06-thread-ask-a", "2026-01-06-thread-ask-b"].sort());
+    assert.match(cli(root, ["open", "--graph", "team-x"]), /no matching open items/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
