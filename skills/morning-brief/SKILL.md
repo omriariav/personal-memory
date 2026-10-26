@@ -49,16 +49,17 @@ one calendar-tool fetch). Skip working-location / all-day "Office" markers.
 **Memory** (default graph + all shared; no `--graph`):
 
 ```bash
-npx tsx src/cli.ts list --type todo --limit 200
-npx tsx src/cli.ts list --type pending-decision --limit 200
+npx tsx src/cli.ts open --limit 200
 npx tsx src/cli.ts list --since <since-date> --limit 200
 ```
 
 `<since-date>` = the previous working day (per the override's working week;
 default Mon–Fri). `list --since` filters on first-seen `date`, so entries
 refreshed in place won't show as new. `--limit 200` can truncate: compare
-against the CLI's total count line and say so in the brief if truncated. Keep only `[open]` rows from the first two — `[resolved → id]`
-is settled.
+against the CLI's total count line and say so in the brief if truncated.
+`open` returns only unresolved `todo`/`pending-decision` entries — anything
+already `[resolved → id]` is settled and never reaches the brief, so no
+status filtering is needed on it.
 
 **Override sources** — each one exactly as the override describes.
 
