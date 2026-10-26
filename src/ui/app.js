@@ -1647,15 +1647,16 @@ lookup:
   command: "your-directory-lookup {query}"
 ---
 
-# Resolving people against the directory
+# Resolving slugs against this directory
 
-Consult this source before minting a NEW person slug — run the lookup with
-the person's full name.
+Describe here, in your own words, when an agent should consult this source
+and what to do with the result. The shipped \`sources/people-directory.md\`
+is the worked example; the rules that do not vary are:
 
-- **Exactly one match** → mint the slug from the canonical directory name.
-- **Zero or multiple matches** → do not mint.
-
-Never let a lookup gate a capture.
+- A source decides **which** slug gets minted, never **whether** one does —
+  a name this directory has never heard of still gets a slug.
+- A lookup never gates a capture: if the command is unavailable or slow,
+  the memory is written anyway.
 `;
 
 function renderSources() {

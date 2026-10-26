@@ -261,9 +261,15 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
    Before minting a **new** person/team slug, consult an enabled reference
    source of that kind (`memory sources`; the file body says how): run the
    lookup with the full name — **exactly one match** → mint from the canonical
-   directory name and tag the entry `slug-minted-from-directory`; zero or
-   multiple matches → don't mint, keep the name in the body only. Never let a
-   lookup gate a capture — if the source is unavailable, log anyway.
+   directory name and tag the entry `slug-minted-from-directory`. **Zero or
+   multiple matches** → mint exactly as you would with no source at all:
+   derive a lower-kebab slug from the name as given and offer it for
+   confirmation. A source only improves which slug gets minted; it never
+   decides *whether* someone gets one. Plenty of people worth remembering —
+   candidates, vendors, partners, anyone outside the company — will never
+   appear in a corporate directory, and they must not end up as prose in a
+   body that `--person` can never find. Never let a lookup gate a capture: if
+   the source is disabled, unavailable, or slow, log anyway.
 5. **Always ground recall in citations** (entry file paths). If memory is silent,
    say so and offer to log it.
 6. **Stay local** — default embeddings are on-device. Only set

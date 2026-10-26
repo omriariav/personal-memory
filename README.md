@@ -361,13 +361,12 @@ Where the store uses it:
   lists them under their own heading with the directory's reasoning, and keeps
   the normal merge/ignore actions so a wrong dismissal can be overridden.
 - **Agent slug minting**: agents consult an enabled source before minting a
-  new person/team slug — exactly one match mints from the canonical name
-  (tagged `slug-minted-from-directory`); zero or multiple matches means no
-  mint. See [AGENTS.md](AGENTS.md). Note this changes capture behaviour: with
-  no source enabled (the default) an agent mints a slug for a new person as it
-  always has, so someone your directory doesn't list — a candidate, a vendor,
-  an external partner — keeps getting a person slug. Enable a source and those
-  people stay prose in the entry body instead.
+  new person/team slug. Exactly one match mints from the canonical directory
+  name (tagged `slug-minted-from-directory`); zero or multiple matches mint
+  exactly as they would with no source — derived from the name as given, and
+  offered for confirmation. A source decides *which* slug gets minted, never
+  *whether* one does, so a person your directory has never heard of still
+  gets one. See [AGENTS.md](AGENTS.md).
 
 Sources never gate a write — capture stays immediate; they only make
 suggestions and repairs smarter. `memory sources` lists and validates the

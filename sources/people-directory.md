@@ -27,8 +27,14 @@ the person's full name:
 - **Exactly one match** → mint the slug from the canonical directory name
   (lower-kebab), and tag the entry `slug-minted-from-directory` so a wrong
   mint stays findable.
-- **Zero or multiple matches** → do not mint; keep the person's name in the
-  entry body only, or reuse an existing slug if one clearly fits.
+- **Zero or multiple matches** → mint exactly as you would with no source at
+  all: reuse an existing slug if one clearly fits, otherwise derive a
+  lower-kebab slug from the name as given and offer it for confirmation.
+
+This source decides **which** slug gets minted, never **whether** one does.
+A person this directory has never heard of — a candidate, a vendor, someone
+at another company — is exactly as worth remembering, and leaving them as
+prose in a body would hide them from `memory person` and `--person` forever.
 
 Maintenance uses the same lookup to check slug-merge suggestions: two slugs
 resolving to distinct directory identities auto-dismiss the suggestion; both
