@@ -87,6 +87,18 @@ import { comboboxHtml, wireCombobox } from "./combobox.js";
  * @property {string} [error]
 
  *
+ * @typedef {Object} Source
+ * @property {string} name
+ * @property {"person"|"team"} [kind]
+ * @property {"template"|"override"} [origin]
+ * @property {string} [path]
+ * @property {boolean} enabled
+ * @property {{command: string, refresh?: string, cache_ttl_days?: number}} [lookup]
+ * @property {string} [body]
+ * @property {string} raw
+ * @property {string} [error]
+
+ *
  * @typedef {Object} SlugSuggestion
  * @property {"person"|"team"|"tag"} kind
  * @property {string} from
@@ -104,6 +116,7 @@ import { comboboxHtml, wireCombobox } from "./combobox.js";
  * @property {Record<string, number>} counts
  * @property {Record<string, number>} suggestionCounts
  * @property {SlugSuggestion[]} suggestions
+ * @property {(SlugSuggestion & {sourceReason: string})[]} [sourceDismissed]
  *
  * @typedef {Object} MaintenanceState
  * @property {"never"|"running"|"success"|"error"} status
@@ -169,6 +182,8 @@ const state = {
   rulesError: "",
   /** @type {Connector[]|null} lazy-loaded on first visit; null = not fetched */
   connectors: null,
+  /** @type {Source[]|null} reference sources; lazy-loaded on first visit */
+  sources: null,
   /** @type {MaintenanceSnapshot|null} lazy-loaded on first visit */
   maintenance: null,
   maintenanceLoading: false,
@@ -358,7 +373,7 @@ function splitFrontmatter(text) {
 
 // ---------- routing ----------
 
-/** @returns {{ view: "record" } | { view: "entry", id: string } | { view: "graph", graph: string } | { view: "graphs" } | { view: "graphmanifest", slug: string } | { view: "connectors" } | { view: "connector", name: string } | { view: "maintenance" }} */
+/** @returns {{ view: "record" } | { view: "entry", id: string } | { view: "graph", graph: string } | { view: "graphs" } | { view: "graphmanifest", slug: string } | { view: "connectors" } | { view: "connector", name: string } | { view: "sources" } | { view: "source", name: string } | { view: "maintenance" }} */
 function route() {
   const h = location.hash;
   if (h.startsWith("#/entry/")) return { view: "entry", id: decodeURIComponent(h.slice(8)) };
@@ -375,6 +390,9 @@ function route() {
   if (h.startsWith("#/maintenance")) return { view: "maintenance" };
   if (h.startsWith("#/connector/")) return { view: "connector", name: decodeURIComponent(h.slice(12)) };
   if (h.startsWith("#/connectors")) return { view: "connectors" };
+  // `#/sources` also starts with `#/source`, so the detail route must test the slash.
+  if (h.startsWith("#/source/")) return { view: "source", name: decodeURIComponent(h.slice(9)) };
+  if (h.startsWith("#/sources")) return { view: "sources" };
   return { view: "record" };
 }
 
@@ -419,6 +437,7 @@ function renderHeader() {
       <a href="#/graphs" ${r.view === "graphs" || r.view === "graphmanifest" ? 'aria-current="page"' : ""}>Manage Graphs</a>
       <a href="#/maintenance" ${r.view === "maintenance" ? 'aria-current="page"' : ""}>Maintenance</a>
       <a href="#/connectors" ${r.view === "connectors" || r.view === "connector" ? 'aria-current="page"' : ""}>Connectors</a>
+      <a href="#/sources" ${r.view === "sources" || r.view === "source" ? 'aria-current="page"' : ""}>Sources</a>
     </nav>
     <span class="header-spacer"></span>
     ${
@@ -1161,17 +1180,20 @@ Ignore: …
 Writing the entry: …
 `;
 
-/** Where a connector resolves from: committed default template vs private override. */
-const originBadge = (/** @type {Connector} */ c) =>
+/** Where a connector or source resolves from: committed template vs private override. */
+const originBadge = (/** @type {Connector|Source} */ c) =>
   c.origin === "override"
-    ? `<span class="badge origin-custom" title="private override in memory/connectors/ — never committed to the main repo">custom</span>`
+    ? `<span class="badge origin-custom" title="private override under memory/ — never committed to the main repo">custom</span>`
     : c.origin === "template"
-      ? `<span class="badge" title="committed default template in connectors/ — edits via this UI are saved as a private override">default</span>`
+      ? `<span class="badge" title="committed default template — edits via this UI are saved as a private override">default</span>`
       : `<span class="badge" title="not saved yet — saving creates a private override">unsaved</span>`;
 
 /** Resolved file path from repo root; predicts the override path for unsaved drafts. */
 const connectorPath = (/** @type {Connector} */ c) =>
   c.path ?? `memory/connectors/${c.name}.md`;
+
+/** Same, for reference sources. */
+const sourcePath = (/** @type {Source} */ s) => s.path ?? `memory/sources/${s.name}.md`;
 
 
 
@@ -1362,6 +1384,7 @@ function suggestionRow(s) {
           ${actions}
         </span>
         <span class="msnippet">${s.affectedEntries} affected · ${s.fromCount} source uses · ${s.toCount} target uses · ${s.sharedEntries} shared · ${esc(s.reasons.join("; "))}</span>
+        ${"sourceReason" in s && s.sourceReason ? `<span class="msnippet mwhy">directory: ${esc(String(s.sourceReason))}</span>` : ""}
         ${previewRows}
         ${err ? `<span class="merr">${esc(err)}</span>` : ""}
       </span>
@@ -1385,6 +1408,14 @@ function renderMaintenance() {
     return;
   }
   const suggestions = m.audit?.suggestions ?? [];
+  // Pairs a reference source ruled out. Shown rather than silently dropped, so
+  // a WRONG dismissal is visible — and still actionable, since the directory
+  // can be wrong about two people who really are one.
+  const dismissed = m.audit?.sourceDismissed ?? [];
+  const dismissedHtml = dismissed.length
+    ? `<h2>Auto-dismissed by a reference source</h2>
+       <div class="ledger l-top mledger mdismissed">${dismissed.map(suggestionRow).join("")}</div>`
+    : "";
   main.innerHTML = `
     <div class="maintenance-head">
       <div class="colophon">scheduled graph maintenance <span class="sep">·</span> audit ${esc(shortDateTime(m.audit?.generatedAt))}</div>
@@ -1397,6 +1428,7 @@ function renderMaintenance() {
         ? `<div class="ledger l-top mledger">${suggestions.map(suggestionRow).join("")}</div>`
         : `<div class="empty">no merge suggestions</div>`
     }
+    ${dismissedHtml}
   `;
   $("#mrun").addEventListener("click", runMaintenanceNow);
 }
@@ -1590,6 +1622,295 @@ function renderConnector(name) {
       const saved = { ...c, origin: /** @type {const} */ ("override"), path: `memory/connectors/${c.name}.md` };
       $("#corigin").innerHTML = originBadge(saved);
       $("#cpath").innerHTML = `<code>${esc(saved.path)}</code>`;
+    },
+  });
+}
+
+// ---------- reference sources ----------
+
+async function loadSourceList() {
+  const res = await fetch("/api/sources");
+  if (!res.ok) throw new Error(`failed to load /api/sources (${res.status})`);
+  state.sources = /** @type {{sources: Source[]}} */ (await res.json()).sources;
+}
+
+/**
+ * A new source starts DISABLED. SourceSchema defaults `enabled` to true, so a
+ * half-written command would otherwise go live on the next maintenance run —
+ * and nothing in this UI runs a lookup, so there is no way to check it first.
+ */
+const newSourceTemplate = (/** @type {string} */ name) => `---
+name: ${name}
+kind: person
+enabled: false
+lookup:
+  command: "your-directory-lookup {query}"
+---
+
+# Resolving slugs against this directory
+
+Describe here, in your own words, when an agent should consult this source
+and what to do with the result. The shipped \`sources/people-directory.md\`
+is the worked example; the rules that do not vary are:
+
+- A source decides **which** slug gets minted, never **whether** one does —
+  a name this directory has never heard of still gets a slug.
+- A lookup never gates a capture: if the command is unavailable or slow,
+  the memory is written anyway.
+`;
+
+function renderSources() {
+  const main = $("#main");
+  if (state.sources === null) {
+    main.innerHTML = `<div class="loading">loading…</div>`;
+    loadSourceList().then(render, (err) => {
+      main.innerHTML = `<div class="error-banner">${esc(err instanceof Error ? err.message : String(err))}</div>`;
+    });
+    return;
+  }
+  const rows = state.sources
+    .map((s) => {
+      const dot = s.error ? "warn" : s.enabled ? "ok" : "off";
+      const meta = s.error
+        ? `<span class="cerr">${esc(s.error.split("\n")[0])}</span>`
+        : `<code class="cscheme">${esc(s.lookup?.command ?? "")}</code>`;
+      return `
+        <a class="crow" href="#/source/${encodeURIComponent(s.name)}">
+          <span class="cdot ${dot}"></span>
+          <span class="cmain">
+            <span class="ctop">
+              <span class="cname">${esc(s.name)}</span>
+              ${s.kind ? `<span class="badge">${esc(s.kind)}</span>` : ""}
+              ${originBadge(s)}
+              ${s.enabled ? "" : `<span class="badge" title="consulted by nothing until enabled">disabled</span>`}
+              ${meta}
+            </span>
+          </span>
+        </a>`;
+    })
+    .join("");
+  main.innerHTML = `
+    <div class="colophon">authoritative directories the store may consult — frontmatter = the lookup contract, body = the guidance agents follow before minting a slug<span class="sep">·</span>defaults live in <code>sources/</code>, custom versions in <code>memory/sources/</code> (private, never committed)<span class="sep">·</span><strong>at most one source is active at a time</strong> — enabling one turns the others off<span class="sep">·</span>a lookup runs during <code>maintenance</code>, never from this screen</div>
+    <div class="ledger l-top">${rows || `<div class="empty">no source files yet</div>`}</div>
+    <div class="see-all"><button class="chip" id="new-source">+ new source</button></div>
+  `;
+  $("#new-source").addEventListener("click", () => {
+    openModal("new source", (body, close) => {
+      body.innerHTML = `
+        <form class="modal-form" id="ns-form">
+          <label class="modal-label" for="ns-name">name</label>
+          <input class="modal-input" id="ns-name" type="text" placeholder="e.g. people-directory"
+                 autocomplete="off" spellcheck="false" />
+          <div class="modal-hint">lower-kebab slug — saved as a private override at
+            <code id="ns-path">memory/sources/&lt;name&gt;.md</code>, never committed.
+            Starts disabled; enable it once the command is right.</div>
+          <div class="modal-err" id="ns-err" hidden></div>
+          <div class="modal-actions">
+            <button type="button" class="chip" id="ns-cancel">cancel</button>
+            <button type="submit" class="chip chip-primary">create</button>
+          </div>
+        </form>
+      `;
+      const input = /** @type {HTMLInputElement} */ ($("#ns-name"));
+      const err = $("#ns-err");
+      const path = $("#ns-path");
+      input.addEventListener("input", () => {
+        err.hidden = true;
+        path.textContent = `memory/sources/${input.value.trim() || "<name>"}.md`;
+      });
+      $("#ns-cancel").addEventListener("click", close);
+      $("#ns-form").addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        const name = input.value.trim();
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+          err.textContent = "lower-kebab slug only (a-z, 0-9, dashes)";
+          err.hidden = false;
+          return;
+        }
+        if (state.sources?.some((s) => s.name === name)) {
+          close();
+          location.hash = `#/source/${encodeURIComponent(name)}`; // existing name → just open it
+          return;
+        }
+        state.sources = [
+          ...(state.sources ?? []),
+          { name, kind: /** @type {const} */ ("person"), enabled: false, raw: newSourceTemplate(name) },
+        ].sort((a, b) => a.name.localeCompare(b.name));
+        close();
+        location.hash = `#/source/${encodeURIComponent(name)}`;
+      });
+    });
+  });
+}
+
+/** Other sources currently enabled — the ones turning this one on would switch off. */
+const otherEnabled = (/** @type {string} */ name) =>
+  (state.sources ?? []).filter((x) => x.name !== name && x.enabled).map((x) => x.name);
+
+/**
+ * The enabled switch. A disabled source is consulted by nothing, so this is the
+ * control that decides whether the lookup command ever runs — it says so, and
+ * it refuses to act on a file that doesn't parse (the flag lives in the
+ * frontmatter the server would have to rewrite).
+ *
+ * AT MOST ONE SOURCE IS EVER ENABLED, because the reconciler only ever consults
+ * one. Turning this one on turns the others off — the switch says which, and
+ * asks first rather than doing it silently.
+ * @param {HTMLElement} host @param {Source} s @param {string} [note] one-off line after a save
+ */
+function mountSourceToggle(host, s, note) {
+  let enabled = s.enabled;
+  let busy = false;
+  let err = "";
+  let said = note ?? "";
+  const paint = () => {
+    const others = otherEnabled(s.name);
+    host.innerHTML = `
+      <button class="chip ${enabled ? "chip-primary" : ""}" id="stoggle"
+              role="switch" aria-checked="${enabled}" ${busy || s.error ? "disabled" : ""}>
+        ${busy ? "saving…" : enabled ? "enabled" : "disabled"}
+      </button>
+      <span class="save-note">${
+        s.error
+          ? `<span class="cerr">fix the file below before enabling</span>`
+          : err
+            ? `<span class="cerr">${esc(err)}</span>`
+            : said
+              ? `<span class="ok-note">${esc(said)}</span>`
+              : enabled
+                ? `consulted during <code>maintenance</code>; its command will run`
+                : others.length
+                  ? `consulted by nothing — enabling it will turn off <code>${esc(others.join("</code>, <code>"))}</code>`
+                  : `consulted by nothing — the command never runs`
+      }</span>`;
+    const btn = $("#stoggle");
+    if (btn) btn.addEventListener("click", () => confirmThenFlip());
+  };
+  /** Only one source may be active, so turning one on is a decision about the others. */
+  const confirmThenFlip = () => {
+    const others = otherEnabled(s.name);
+    if (enabled || others.length === 0) return flip();
+    openModal("only one source can be active", (body, close) => {
+      body.innerHTML = `
+        <p class="modal-copy">Enabling <code>${esc(s.name)}</code> will turn off
+          <code>${esc(others.join("</code>, <code>"))}</code>.</p>
+        <p class="modal-hint">Maintenance only ever consults one source, so a second
+          enabled one would look active while doing nothing.</p>
+        <div class="modal-actions">
+          <button type="button" class="chip" id="se-cancel">cancel</button>
+          <button type="button" class="chip chip-primary" id="se-ok">enable, turn the others off</button>
+        </div>`;
+      $("#se-cancel").addEventListener("click", close);
+      $("#se-ok").addEventListener("click", () => {
+        close();
+        flip();
+      });
+    });
+  };
+  const flip = async () => {
+    busy = true;
+    err = "";
+    said = "";
+    paint();
+    try {
+      const res = await fetch(`/api/sources/${encodeURIComponent(s.name)}/enabled`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `save failed (${res.status})`);
+      enabled = data.enabled;
+      s.enabled = data.enabled;
+      if (data.disabled?.length) said = `turned off ${data.disabled.join(", ")}`;
+      await loadSourceList(); // the files on disk are authoritative for who else is on
+      const el = $("#sorigin");
+      if (el) el.innerHTML = originBadge({ ...s, origin: "override" });
+      const p = $("#spath");
+      if (p) p.innerHTML = `<code>${esc(data.path)}</code>`;
+      // Re-seed the editor from what was written. Without this it still holds
+      // the pre-toggle text, and saving there would quietly flip the flag back.
+      if (data.raw) {
+        s.raw = data.raw;
+        const editorHost = $("#seditor-host");
+        if (editorHost) mountSourceEditor(editorHost, s);
+      }
+    } catch (e) {
+      err = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+      paint();
+    }
+  };
+  paint();
+}
+
+/** @param {string} name */
+function renderSource(name) {
+  const main = $("#main");
+  if (state.sources === null) {
+    main.innerHTML = `<div class="loading">loading…</div>`;
+    loadSourceList().then(render, (err) => {
+      main.innerHTML = `<div class="error-banner">${esc(err instanceof Error ? err.message : String(err))}</div>`;
+    });
+    return;
+  }
+  const s = state.sources.find((x) => x.name === name);
+  if (!s) {
+    main.innerHTML = `<div class="empty">no source named <code>${esc(name)}</code> — <a href="#/sources">back to sources</a></div>`;
+    return;
+  }
+  main.innerHTML = `
+    <a class="back" href="#/sources">← sources</a>
+    <div class="detail">
+      <h1>${esc(s.name)}</h1>
+      <div class="byline">
+        <span id="sorigin">${originBadge(s)}</span>
+        <span id="spath"><code>${esc(sourcePath(s))}</code></span>
+        ${s.kind ? `<span>resolves ${esc(s.kind)} slugs</span>` : ""}
+      </div>
+      <div class="source-toggle" id="stoggle-host"></div>
+      <div class="connector-editor" id="seditor-host"></div>
+    </div>
+  `;
+  mountSourceToggle($("#stoggle-host"), s);
+  mountSourceEditor($("#seditor-host"), s);
+}
+
+/**
+ * The raw-file editor for one source. Remountable, because toggling `enabled`
+ * rewrites the file underneath it.
+ * @param {HTMLElement} host @param {Source} s
+ */
+function mountSourceEditor(host, s) {
+  mountFileEditor(host, {
+    raw: s.raw,
+    error: s.error,
+    ariaLabel: "source file",
+    onSave: async (raw) => {
+      const res = await fetch(`/api/sources/${encodeURIComponent(s.name)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/markdown; charset=utf-8" },
+        body: raw,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `save failed (${res.status})`);
+      s.raw = raw;
+      s.enabled = /^enabled:\s*true\s*$/m.test(raw);
+      await loadSourceList(); // authoritative: the save may have switched others off
+      const saved = { ...s, origin: /** @type {const} */ ("override"), path: data.path };
+      $("#sorigin").innerHTML = originBadge(saved);
+      $("#spath").innerHTML = `<code>${esc(data.path)}</code>`;
+      // The frontmatter may have flipped the flag by hand — keep the switch honest,
+      // and say so when saving enabled text switched another source off.
+      const toggleHost = $("#stoggle-host");
+      if (toggleHost) {
+        mountSourceToggle(
+          toggleHost,
+          { ...s, error: undefined },
+          data.disabled?.length ? `turned off ${data.disabled.join(", ")}` : undefined,
+        );
+      }
     },
   });
 }
@@ -2141,6 +2462,8 @@ function render() {
   else if (r.view === "maintenance") renderMaintenance();
   else if (r.view === "connectors") renderConnectors();
   else if (r.view === "connector") renderConnector(r.name);
+  else if (r.view === "sources") renderSources();
+  else if (r.view === "source") renderSource(r.name);
   else renderEntry(r.id);
   window.scrollTo(0, 0);
 }

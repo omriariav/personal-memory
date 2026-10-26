@@ -2594,3 +2594,17 @@ dialog.modal.backfill-modal {
   background: var(--danger, #e5534b);
   color: var(--bg, #fff);
 }
+
+/* Suggestions a reference source ruled out: present but visually secondary —
+   they are evidence of a decision already taken, not a queue to work through. */
+.mdismissed { opacity: 0.72; }
+.mdismissed .mrow { border-left: 2px solid var(--border); }
+.msnippet.mwhy { font-style: italic; }
+
+/* Reference-source enabled switch — the control that decides whether a
+   lookup command ever runs, so its state reads at a glance. */
+.source-toggle { display: flex; align-items: center; gap: 10px; margin: 10px 0 18px; }
+.source-toggle .save-note { font-size: 12px; color: var(--muted); }
+
+.modal-copy { margin: 0 0 8px; font-size: 14px; }
+.ok-note { color: var(--good-text); }
