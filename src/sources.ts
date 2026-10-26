@@ -136,11 +136,56 @@ export async function setSourceEnabled(
   enabled: boolean,
   templatesDir = SOURCES_DIR,
   overridesDir = PRIVATE_SOURCES_DIR,
-): Promise<string> {
+): Promise<SourceWrite> {
   const file = (await loadSources(templatesDir, overridesDir)).find((s) => s.name === name);
   if (!file) throw new Error(`no source named '${name}'`);
   if (file.error) throw new Error(file.error); // never rewrite a file we can't parse
-  return writeSource(name, setFrontmatterFlag(file.raw, "enabled", enabled), overridesDir);
+  const path = await writeSource(name, setFrontmatterFlag(file.raw, "enabled", enabled), overridesDir);
+  return { path, disabled: enabled ? await disableOthers(name, templatesDir, overridesDir) : [] };
+}
+
+/** What a write did: where it landed, and which sources it switched off to get there. */
+export interface SourceWrite {
+  path: string;
+  disabled: string[];
+}
+
+/**
+ * Write a source file, then hold the one-enabled rule.
+ *
+ * AT MOST ONE SOURCE IS EVER ENABLED — across kinds, not per kind. The
+ * reconciler consults a single source (`usable.find(...)` by kind), so a second
+ * enabled file is never read: it would sit there looking active while doing
+ * nothing, and worse, an alphabetically-earlier name silently shadows the one
+ * that works. One active source keeps "enabled" meaning what it says.
+ *
+ * Enforced here rather than in the UI alone, so hand-edited frontmatter and
+ * raw saves can't get around it.
+ */
+export async function saveSource(
+  name: string,
+  raw: string,
+  templatesDir = SOURCES_DIR,
+  overridesDir = PRIVATE_SOURCES_DIR,
+): Promise<SourceWrite> {
+  const { fm } = parseSource(raw, name); // throws before anything is written
+  const path = await writeSource(name, raw, overridesDir);
+  return { path, disabled: fm.enabled ? await disableOthers(name, templatesDir, overridesDir) : [] };
+}
+
+/** Turn off every enabled source except `keep`; returns the names switched off. */
+async function disableOthers(
+  keep: string,
+  templatesDir: string,
+  overridesDir: string,
+): Promise<string[]> {
+  const others = (await loadSources(templatesDir, overridesDir)).filter(
+    (s) => s.name !== keep && !s.error && s.fm?.enabled,
+  );
+  for (const s of others) {
+    await writeSource(s.name, setFrontmatterFlag(s.raw, "enabled", false), overridesDir);
+  }
+  return others.map((s) => s.name);
 }
 
 /** Rewrite `key: <bool>` inside the leading `---` block only, appending it when absent. */

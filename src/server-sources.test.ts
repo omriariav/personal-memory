@@ -97,6 +97,11 @@ function scratchStore(): string {
   runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
   mkdirSync(join(root, "sources"), { recursive: true });
   writeFileSync(join(root, "sources", "people-directory.md"), TEMPLATE, "utf8");
+  writeFileSync(
+    join(root, "sources", "acme-directory.md"),
+    TEMPLATE.replace("name: people-directory", "name: acme-directory"),
+    "utf8",
+  );
   return root;
 }
 
@@ -105,8 +110,8 @@ test("GET /api/sources lists templates with their lookup contract, running nothi
   try {
     await withServer(root, async (base) => {
       const sources = await getSources(base);
-      assert.equal(sources.length, 1);
-      const s = sources[0]!;
+      assert.equal(sources.length, 2);
+      const s = sources.find((x) => x.name === "people-directory")!;
       assert.equal(s.name, "people-directory");
       assert.equal(s.kind, "person");
       assert.equal(s.origin, "template");
@@ -234,6 +239,40 @@ test("POST /api/sources/<name>/enabled rejects a bad name, body, and unknown sou
       assert.equal(bad.status, 400);
       // nothing was written by any of the rejected calls
       assert.equal(existsSync(join(root, "memory", "sources")), false);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("only one source can be enabled: the endpoints switch the others off", { timeout: 300_000 }, async () => {
+  const root = scratchStore();
+  try {
+    await withServer(root, async (base) => {
+      const first = await setEnabled(base, "acme-directory", true);
+      assert.deepEqual(((await first.json()) as { disabled: string[] }).disabled, []);
+
+      // enabling the second reports — and performs — switching the first off
+      const second = await setEnabled(base, "people-directory", true);
+      assert.deepEqual(((await second.json()) as { disabled: string[] }).disabled, ["acme-directory"]);
+      const after = await getSources(base);
+      assert.deepEqual(
+        after.map((s) => [s.name, s.enabled]).sort(),
+        [["acme-directory", false], ["people-directory", true]].sort(),
+      );
+
+      // a raw save can't sneak a second one on either
+      const sneak = await put(base, "acme-directory", OVERRIDE.replace("name: people-directory", "name: acme-directory"));
+      assert.deepEqual(((await sneak.json()) as { disabled: string[] }).disabled, ["people-directory"]);
+      assert.deepEqual(
+        (await getSources(base)).map((s) => [s.name, s.enabled]).sort(),
+        [["acme-directory", true], ["people-directory", false]].sort(),
+      );
+
+      // disabling the last one leaves zero enabled, and touches nothing else
+      const off = await setEnabled(base, "acme-directory", false);
+      assert.deepEqual(((await off.json()) as { disabled: string[] }).disabled, []);
+      assert.equal((await getSources(base)).filter((s) => s.enabled).length, 0);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });

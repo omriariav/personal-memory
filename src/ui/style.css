@@ -2605,3 +2605,6 @@ dialog.modal.backfill-modal {
    lookup command ever runs, so its state reads at a glance. */
 .source-toggle { display: flex; align-items: center; gap: 10px; margin: 10px 0 18px; }
 .source-toggle .save-note { font-size: 12px; color: var(--muted); }
+
+.modal-copy { margin: 0 0 8px; font-size: 14px; }
+.ok-note { color: var(--good-text); }

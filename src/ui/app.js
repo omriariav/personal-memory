@@ -1689,7 +1689,7 @@ function renderSources() {
     })
     .join("");
   main.innerHTML = `
-    <div class="colophon">authoritative directories the store may consult — frontmatter = the lookup contract, body = the guidance agents follow before minting a slug<span class="sep">·</span>defaults live in <code>sources/</code>, custom versions in <code>memory/sources/</code> (private, never committed)<span class="sep">·</span>a lookup runs only during <code>maintenance</code>, never from this screen</div>
+    <div class="colophon">authoritative directories the store may consult — frontmatter = the lookup contract, body = the guidance agents follow before minting a slug<span class="sep">·</span>defaults live in <code>sources/</code>, custom versions in <code>memory/sources/</code> (private, never committed)<span class="sep">·</span><strong>at most one source is active at a time</strong> — enabling one turns the others off<span class="sep">·</span>a lookup runs during <code>maintenance</code>, never from this screen</div>
     <div class="ledger l-top">${rows || `<div class="empty">no source files yet</div>`}</div>
     <div class="see-all"><button class="chip" id="new-source">+ new source</button></div>
   `;
@@ -1742,18 +1742,28 @@ function renderSources() {
   });
 }
 
+/** Other sources currently enabled — the ones turning this one on would switch off. */
+const otherEnabled = (/** @type {string} */ name) =>
+  (state.sources ?? []).filter((x) => x.name !== name && x.enabled).map((x) => x.name);
+
 /**
  * The enabled switch. A disabled source is consulted by nothing, so this is the
  * control that decides whether the lookup command ever runs — it says so, and
  * it refuses to act on a file that doesn't parse (the flag lives in the
  * frontmatter the server would have to rewrite).
- * @param {HTMLElement} host @param {Source} s
+ *
+ * AT MOST ONE SOURCE IS EVER ENABLED, because the reconciler only ever consults
+ * one. Turning this one on turns the others off — the switch says which, and
+ * asks first rather than doing it silently.
+ * @param {HTMLElement} host @param {Source} s @param {string} [note] one-off line after a save
  */
-function mountSourceToggle(host, s) {
+function mountSourceToggle(host, s, note) {
   let enabled = s.enabled;
   let busy = false;
   let err = "";
+  let said = note ?? "";
   const paint = () => {
+    const others = otherEnabled(s.name);
     host.innerHTML = `
       <button class="chip ${enabled ? "chip-primary" : ""}" id="stoggle"
               role="switch" aria-checked="${enabled}" ${busy || s.error ? "disabled" : ""}>
@@ -1764,16 +1774,42 @@ function mountSourceToggle(host, s) {
           ? `<span class="cerr">fix the file below before enabling</span>`
           : err
             ? `<span class="cerr">${esc(err)}</span>`
-            : enabled
-              ? `consulted during <code>maintenance</code>; its command will run`
-              : `consulted by nothing — the command never runs`
+            : said
+              ? `<span class="ok-note">${esc(said)}</span>`
+              : enabled
+                ? `consulted during <code>maintenance</code>; its command will run`
+                : others.length
+                  ? `consulted by nothing — enabling it will turn off <code>${esc(others.join("</code>, <code>"))}</code>`
+                  : `consulted by nothing — the command never runs`
       }</span>`;
     const btn = $("#stoggle");
-    if (btn) btn.addEventListener("click", flip);
+    if (btn) btn.addEventListener("click", () => confirmThenFlip());
+  };
+  /** Only one source may be active, so turning one on is a decision about the others. */
+  const confirmThenFlip = () => {
+    const others = otherEnabled(s.name);
+    if (enabled || others.length === 0) return flip();
+    openModal("only one source can be active", (body, close) => {
+      body.innerHTML = `
+        <p class="modal-copy">Enabling <code>${esc(s.name)}</code> will turn off
+          <code>${esc(others.join("</code>, <code>"))}</code>.</p>
+        <p class="modal-hint">Maintenance only ever consults one source, so a second
+          enabled one would look active while doing nothing.</p>
+        <div class="modal-actions">
+          <button type="button" class="chip" id="se-cancel">cancel</button>
+          <button type="button" class="chip chip-primary" id="se-ok">enable, turn the others off</button>
+        </div>`;
+      $("#se-cancel").addEventListener("click", close);
+      $("#se-ok").addEventListener("click", () => {
+        close();
+        flip();
+      });
+    });
   };
   const flip = async () => {
     busy = true;
     err = "";
+    said = "";
     paint();
     try {
       const res = await fetch(`/api/sources/${encodeURIComponent(s.name)}/enabled`, {
@@ -1784,7 +1820,9 @@ function mountSourceToggle(host, s) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `save failed (${res.status})`);
       enabled = data.enabled;
-      state.sources = null; // the file on disk is now authoritative
+      s.enabled = data.enabled;
+      if (data.disabled?.length) said = `turned off ${data.disabled.join(", ")}`;
+      await loadSourceList(); // the files on disk are authoritative for who else is on
       const el = $("#sorigin");
       if (el) el.innerHTML = originBadge({ ...s, origin: "override" });
       const p = $("#spath");
@@ -1857,14 +1895,20 @@ function mountSourceEditor(host, s) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `save failed (${res.status})`);
       s.raw = raw;
-      state.sources = null; // refetch on next view — the file on disk is now authoritative
+      s.enabled = /^enabled:\s*true\s*$/m.test(raw);
+      await loadSourceList(); // authoritative: the save may have switched others off
       const saved = { ...s, origin: /** @type {const} */ ("override"), path: data.path };
       $("#sorigin").innerHTML = originBadge(saved);
       $("#spath").innerHTML = `<code>${esc(data.path)}</code>`;
-      // The frontmatter may have flipped the flag by hand — keep the switch honest.
+      // The frontmatter may have flipped the flag by hand — keep the switch honest,
+      // and say so when saving enabled text switched another source off.
       const toggleHost = $("#stoggle-host");
       if (toggleHost) {
-        mountSourceToggle(toggleHost, { ...s, enabled: /^enabled:\s*true\s*$/m.test(raw), error: undefined });
+        mountSourceToggle(
+          toggleHost,
+          { ...s, error: undefined },
+          data.disabled?.length ? `turned off ${data.disabled.join(", ")}` : undefined,
+        );
       }
     },
   });

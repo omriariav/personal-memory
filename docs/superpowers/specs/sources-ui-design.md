@@ -108,6 +108,19 @@ validation path, and the command, its comments and the guidance body survive
 a toggle untouched. The switch is unavailable on a file that fails validation,
 since the flag lives in frontmatter the server would have to rewrite.
 
+**At most one source may be enabled, across kinds** (added on request after
+the multi-source behaviour came to light). `reconcileSuggestions` picks a
+single source per kind with `usable.find(...)`, and `loadSources` sorts by
+filename — so a second enabled source is never consulted, and an
+alphabetically-earlier name silently shadows a working one. Rather than warn
+about a state that is never useful, the rule removes it: `saveSource` and
+`setSourceEnabled` both disable every other enabled source and report which,
+so raw saves and hand-edited frontmatter are covered, not just the switch. The
+UI asks before switching anything off and names what it will turn off.
+
+Known consequence, accepted: a `person` directory and a `team` directory can
+no longer run together, since the limit is global rather than per kind.
+
 The toggle endpoint returns the file **as written**, and the detail screen
 re-seeds its editor from that. Without it the editor keeps pre-toggle text and
 a later save there silently flips the flag back — a bug found by toggling in

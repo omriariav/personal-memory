@@ -8,7 +8,7 @@ import { ROOT } from "./ingest.js";
 import { search, indexStatus, type SearchFilters } from "./store.js";
 import { MissingIndexError, openCatalog, type Catalog } from "./catalog.js";
 import { loadConnectors, loadConnectorState, writeConnector, relConnector } from "./connectors.js";
-import { loadSources, writeSource, setSourceEnabled, relSource } from "./sources.js";
+import { loadSources, saveSource, setSourceEnabled, relSource } from "./sources.js";
 import {
   DEFAULT_GRAPH,
   createGraph,
@@ -259,14 +259,14 @@ async function apiPutSource(req: IncomingMessage, res: ServerResponse, name: str
     sendJson(res, 400, { error: "empty body — send the full source file text" });
     return;
   }
-  let path: string;
   try {
-    path = await writeSource(name, raw);
+    // saveSource holds the one-enabled rule, so a raw save can't quietly
+    // leave two sources looking active when only one is ever consulted.
+    const { path, disabled } = await saveSource(name, raw);
+    sendJson(res, 200, { ok: true, name, path: relSource(path), disabled });
   } catch (err) {
     sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
-    return;
   }
-  sendJson(res, 200, { ok: true, name, path: relSource(path) });
 }
 
 /**
@@ -288,11 +288,11 @@ async function apiSetSourceEnabled(req: IncomingMessage, res: ServerResponse, na
     return;
   }
   try {
-    const path = await setSourceEnabled(name, enabled);
+    const { path, disabled } = await setSourceEnabled(name, enabled);
     // Return the file as written: the detail screen's editor holds the text
     // from before the toggle, and saving that back would undo it.
     const raw = (await loadSources()).find((s) => s.name === name)?.raw;
-    sendJson(res, 200, { ok: true, name, enabled, path: relSource(path), raw });
+    sendJson(res, 200, { ok: true, name, enabled, path: relSource(path), raw, disabled });
   } catch (err) {
     sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
   }

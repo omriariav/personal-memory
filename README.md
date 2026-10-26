@@ -317,6 +317,14 @@ minimally `[{"name": "Jane Doe", "id": "jdoe", "title": "…", "team": "…"}]`.
 It is user-supplied and local-first — the store never ships credentials or
 fetches anything itself.
 
+**At most one source is active at a time.** Reconciliation consults a single
+source, so a second enabled one is never read — it would sit there looking
+active while doing nothing, and a file whose name sorts earlier would silently
+shadow the one that works. Enabling a source therefore turns off any other:
+the UI asks first and names what it will switch off, and the rule is enforced
+server-side, so hand-edited frontmatter can't get around it. Zero enabled
+sources is the default and a perfectly good state.
+
 **Managing them in the UI.** The Sources screen (`#/sources`) lists every
 resolved source with its kind, where it resolved from, whether it is enabled,
 and its lookup command — and flags any file that fails validation. A disabled

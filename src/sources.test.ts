@@ -9,6 +9,7 @@ import {
   lookupDirectory,
   parseSource,
   reconcileSuggestions,
+  saveSource,
   setSourceEnabled,
   writeSource,
   slugQuery,
@@ -445,9 +446,10 @@ test("setSourceEnabled on a template writes an override, leaving the template un
   const template = VALID.replace("enabled: true", "enabled: false");
   writeFileSync(join(templates, "people-directory.md"), template, "utf8");
 
-  const path = await setSourceEnabled("people-directory", true, templates, overrides);
+  const { path, disabled } = await setSourceEnabled("people-directory", true, templates, overrides);
 
   assert.equal(path, join(overrides, "people-directory.md"));
+  assert.deepEqual(disabled, []);
   assert.equal(readFileSync(join(templates, "people-directory.md"), "utf8"), template);
   const [file] = await loadSources(templates, overrides);
   assert.equal(file?.origin, "override");
@@ -484,5 +486,95 @@ test("setSourceEnabled refuses an unknown name and an unparseable file", async (
   await assert.rejects(
     () => setSourceEnabled("people-directory", true, templates, overrides),
     /invalid source frontmatter/,
+  );
+});
+
+// ---------------- at most one enabled source ----------------
+
+const named = (name: string, enabled: boolean) =>
+  VALID.replace("name: people-directory", `name: ${name}`).replace(
+    "enabled: true",
+    `enabled: ${enabled}`,
+  );
+
+test("enabling a source disables every other enabled one and reports which", async () => {
+  const { templates, overrides } = makeLayers();
+  writeFileSync(join(overrides, "acme-directory.md"), named("acme-directory", true), "utf8");
+  writeFileSync(join(overrides, "people-directory.md"), named("people-directory", false), "utf8");
+
+  const { disabled } = await setSourceEnabled("people-directory", true, templates, overrides);
+
+  assert.deepEqual(disabled, ["acme-directory"]);
+  const states = (await loadSources(templates, overrides)).map((s) => [s.name, s.fm?.enabled]);
+  assert.deepEqual(states, [["acme-directory", false], ["people-directory", true]]);
+});
+
+test("enabling a source leaves an already-disabled one alone", async () => {
+  const { templates, overrides } = makeLayers();
+  writeFileSync(join(overrides, "acme-directory.md"), named("acme-directory", false), "utf8");
+  writeFileSync(join(overrides, "people-directory.md"), named("people-directory", false), "utf8");
+
+  const { disabled } = await setSourceEnabled("people-directory", true, templates, overrides);
+
+  assert.deepEqual(disabled, []);
+});
+
+test("disabling a source never touches the others", async () => {
+  const { templates, overrides } = makeLayers();
+  writeFileSync(join(overrides, "acme-directory.md"), named("acme-directory", false), "utf8");
+  writeFileSync(join(overrides, "people-directory.md"), named("people-directory", true), "utf8");
+
+  const { disabled } = await setSourceEnabled("people-directory", false, templates, overrides);
+
+  assert.deepEqual(disabled, []);
+  const states = (await loadSources(templates, overrides)).map((s) => [s.name, s.fm?.enabled]);
+  assert.deepEqual(states, [["acme-directory", false], ["people-directory", false]]);
+});
+
+test("the one-enabled rule holds across kinds, not just within one", async () => {
+  const { templates, overrides } = makeLayers();
+  writeFileSync(
+    join(overrides, "acme-directory.md"),
+    named("acme-directory", true).replace("kind: person", "kind: team"),
+    "utf8",
+  );
+  writeFileSync(join(overrides, "people-directory.md"), named("people-directory", false), "utf8");
+
+  const { disabled } = await setSourceEnabled("people-directory", true, templates, overrides);
+
+  assert.deepEqual(disabled, ["acme-directory"]);
+});
+
+test("saveSource enforces the rule too — raw text can't sneak a second one on", async () => {
+  const { templates, overrides } = makeLayers();
+  writeFileSync(join(overrides, "acme-directory.md"), named("acme-directory", true), "utf8");
+
+  const { disabled } = await saveSource(
+    "people-directory",
+    named("people-directory", true),
+    templates,
+    overrides,
+  );
+
+  assert.deepEqual(disabled, ["acme-directory"]);
+  const states = (await loadSources(templates, overrides)).map((s) => [s.name, s.fm?.enabled]);
+  assert.deepEqual(states, [["acme-directory", false], ["people-directory", true]]);
+});
+
+test("saveSource of a DISABLED file leaves an enabled one running", async () => {
+  const { templates, overrides } = makeLayers();
+  writeFileSync(join(overrides, "acme-directory.md"), named("acme-directory", true), "utf8");
+
+  const { disabled } = await saveSource(
+    "people-directory",
+    named("people-directory", false),
+    templates,
+    overrides,
+  );
+
+  assert.deepEqual(disabled, []);
+  assert.equal(
+    (await loadSources(templates, overrides)).find((s) => s.name === "acme-directory")?.fm?.enabled,
+    true,
   );
 });
