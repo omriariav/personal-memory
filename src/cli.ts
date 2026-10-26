@@ -938,14 +938,25 @@ async function cmdOpen(argv: string[]) {
     return r;
   };
 
-  for (const p of prefixes) {
-    const matches = open.flatMap((e) => {
+  // Uniqueness is judged over EVERY open item, never the filtered ones: a
+  // --person/--graph/--since that hides the thread's other open ask must not
+  // turn an ambiguous prefix into `exact` (which the skills settle unattended).
+  const narrowed = Object.values(filters).some((v) => v !== undefined);
+  const everyOpen = prefixes.length > 0 && narrowed
+    ? (await Promise.all(openTypes.map((type) => catalog.filter({ type })))).flat().filter(isOpen)
+    : open;
+  const matchesIn = (entries: typeof open, p: string) =>
+    entries.flatMap((e) => {
       const id = (e.source_ids ?? []).find((s) => sourceIdMatches(s, p));
       return id ? [{ e, id }] : [];
     });
+
+  for (const p of prefixes) {
+    const matches = matchesIn(open, p);
+    const unique = matchesIn(everyOpen, p).length === 1;
     // Exact: the prefix IS the anchor, or names a thread/message only one open item lives in.
     for (const { e, id } of matches) {
-      const scope = id === p || (p.split(":").length >= 3 && matches.length === 1) ? "exact" : "conversation";
+      const scope = id === p || (p.split(":").length >= 3 && unique) ? "exact" : "conversation";
       const r = row(e);
       if (r.evidence.source?.scope !== "exact") r.evidence.source = { id, scope };
     }

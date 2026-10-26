@@ -164,3 +164,40 @@ test("open: evidence, confidence, prefix rules, graphs, crowding, and settle gua
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// A filter narrows which open items are LISTED; it must not change what the
+// evidence means. Judging thread-uniqueness over the filtered set would let
+// `--person` hide a thread's other open ask and promote an ambiguous prefix
+// to `exact` — which the skills settle unattended.
+const SHARED_THREAD = "slack:C6:1700000800.1";
+const AMBIGUOUS: SeedEntry[] = [
+  { id: "2026-01-06-shared-ask-x", date: "2026-01-06", type: "todo", title: "Send the deploy checklist",
+    people: ["ana-levi"], body: "Share the deploy checklist in the thread.", source_ids: [`${SHARED_THREAD}:1700000801.1`] },
+  { id: "2026-01-06-shared-ask-y", date: "2026-01-06", type: "todo", title: "Book the retro room",
+    people: ["boris-cohen"], body: "Book a room for the retro.", source_ids: [`${SHARED_THREAD}:1700000802.1`] },
+];
+
+test("open: a filter never promotes an ambiguous thread to exact", { timeout: 300_000 }, () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-cli-open-filter-"));
+  try {
+    seedStore(root, AMBIGUOUS);
+    runInStore(root, `const s = await import(${STORE_MOD}); console.log(JSON.stringify(await s.syncIndex()));`);
+
+    // Unfiltered, the thread holds two open asks: neither is exact.
+    const both = open(root, ["--source", SHARED_THREAD]);
+    assert.equal(both.items.length, 2);
+    assert.ok(both.items.every((r) => r.confidence === "candidate" && r.evidence.source?.scope === "conversation"));
+
+    // Filtering to one of them must not change that: the thread is still ambiguous.
+    const filtered = open(root, ["--source", SHARED_THREAD, "--person", "ana-levi"]);
+    assert.deepEqual(filtered.items.map((r) => r.id), ["2026-01-06-shared-ask-x"]);
+    assert.deepEqual([filtered.items[0]?.confidence, filtered.items[0]?.evidence.source?.scope],
+      ["candidate", "conversation"]);
+
+    // A prefix that IS the anchor still identifies one message exactly, filter or not.
+    const anchored = open(root, ["--source", `${SHARED_THREAD}:1700000801.1`, "--person", "ana-levi"]);
+    assert.deepEqual([anchored.items[0]?.confidence, anchored.items[0]?.evidence.source?.scope], ["high", "exact"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
