@@ -19,6 +19,8 @@ Extraction:
   (`memory list` first — same person, same slug, always).
 - Pick the `type` that fits: `decision | pending-decision | todo | 1on1 |
   hiring | incident | achievement | feedback | meeting | event | note`.
+  A booked meeting or sent invite is a `meeting`/`event`, never a `todo` —
+  the calendar tracks it, so nothing would ever close the todo.
 - `date` = when the thing happened (visible in the content), not today —
   ask only if genuinely ambiguous.
 - Body: what happened, context, decisions, follow-ups. Concrete over vague.

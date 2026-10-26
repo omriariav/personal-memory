@@ -24,9 +24,10 @@ import {
 } from "./graphs.js";
 import { copyEntry, deleteGraph, moveEntry, removeEntry, syncGraphs } from "./membership.js";
 import { commitMemoryRepo } from "./memory-git.js";
-import { buildChainIndex, chainAncestry, entryStatus, validateFollowsTargets, type ChainAnnotation } from "./chains.js";
-import { applyChainLink, dismissSlugSuggestion, mergeSlugs, proposeSlugMerge, slugUsage, type SlugKind } from "./graph-maintenance.js";
+import { buildChainIndex, chainAncestry, entryStatus, OPEN_TYPES, validateFollowsTargets, type ChainAnnotation } from "./chains.js";
+import { applyChainLink, dismissSlugSuggestion, removeChainLink, mergeSlugs, proposeSlugMerge, slugUsage, type SlugKind } from "./graph-maintenance.js";
 import { recall, type RecallReport } from "./recall.js";
+import { keywordPhrase } from "./recall-queries.js";
 import { resolveIndexSlotDetailed } from "./index-slots.js";
 import { openCatalog } from "./catalog.js";
 
@@ -198,6 +199,27 @@ async function cmdAdd(argv: string[]) {
     }
   }
 
+  // An open item is settled by a NEW linked entry, never by rewriting it in
+  // place (a thread's outcome shares the thread-root anchor with its todo).
+  if (target && OPEN_TYPES.has(target.type) &&
+    entryStatus(target, buildChainIndex(await catalog.linked()))?.status === "open") {
+    const matched = values.update ? undefined : sourceIds.find((s) => (target!.source_ids ?? []).includes(s));
+    // Only Slack has a per-reply id to anchor an outcome on; other sources need their own message id.
+    const distinct = matched?.startsWith("slack:") ? `${matched}:<reply_ts>` : "the outcome message's own id";
+    if ((values.type && values.type !== target.type) || list(values.follows as string).includes(target.id)) {
+      throw new Error(
+        `${matched ? `${matched} already anchors` : "--update targets"} the open ${target.type} ${target.id} — ` +
+          `log the outcome as a new entry with --follows ${target.id}` +
+          (matched ? ` and a distinct source id (${distinct})` : ""),
+      );
+    }
+    if (matched) {
+      // stdout, so sweeps that capture the CLI's output see it alongside the `↻ matches` line.
+      console.log(`  ⚠ refreshing the open ${target.type} in place — if this capture reports its outcome, ` +
+        `log a new entry with --follows ${target.id} (source id: ${distinct}) instead`);
+    }
+  }
+
   // An update keeps the entry's own membership — a re-capture must never
   // silently relocate an entry between graphs. Reclassify explicitly instead.
   const graphs: string[] = target ? target.graphs : [requestedGraph];
@@ -211,7 +233,9 @@ async function cmdAdd(argv: string[]) {
   // --- semantic guard for genuinely new captures (no source-id / --update match) ---
   if (!target && !values["force-new"]) {
     const minSim = values["dup-threshold"] ? Number(values["dup-threshold"]) : undefined;
-    const similar = await findSimilar(`${title}\n${body}`, minSim ? { minSim } : {});
+    // An outcome naturally resembles the item it settles — its --follows targets aren't duplicates.
+    const settles = new Set(list(values.follows as string));
+    const similar = (await findSimilar(`${title}\n${body}`, minSim ? { minSim } : {})).filter((h) => !settles.has(h.id));
     if (similar.length > 0) {
       console.error("✗ this looks like a near-duplicate of:");
       for (const h of similar) console.error(`  ${h.sim.toFixed(3)}  ${h.id} — ${h.title}`);
@@ -354,6 +378,23 @@ async function cmdLink(argv: string[]) {
   if (result.index) {
     console.log(`  indexed (+${result.index.added} changed, ${result.index.unchanged} unchanged)`);
   }
+}
+
+async function cmdUnlink(argv: string[]) {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: { follows: { type: "string" } },
+    allowPositionals: true,
+  });
+  const id = positionals[0];
+  const follows = list(values.follows as string);
+  if (!id || positionals.length !== 1 || follows.length === 0) {
+    throw new Error("usage: memory unlink <id> --follows <earlier-id,…>");
+  }
+  const result = await removeChainLink({ laterId: id, follows });
+  console.log(`✓ unlinked ${id} → no longer follows ${follows.join(", ")}` +
+    (result.follows.length ? ` (still follows ${result.follows.join(", ")})` : ""));
+  console.log(`  ${result.path}`);
 }
 
 async function cmdRemove(argv: string[]) {
@@ -832,6 +873,167 @@ async function cmdList(argv: string[]) {
   console.log(`\n${entries.length} entr${entries.length === 1 ? "y" : "ies"}`);
 }
 
+/** `slack:C1` matches `slack:C1` and `slack:C1:1700…` — prefixes end on a `:` boundary. */
+function sourceIdMatches(sourceId: string, prefix: string): boolean {
+  return sourceId === prefix || sourceId.startsWith(`${prefix}:`);
+}
+
+/** Recall ranks below this still count as query evidence without a lexical term match. */
+const OPEN_SEMANTIC_TOP = 3;
+
+/**
+ * Open todo / pending-decision entries — the items a capture can settle via
+ * `--follows`. Each row carries its evidence: a source-id prefix match
+ * (`exact` when the prefix names a specific message/thread or equals the id,
+ * `conversation` when it only names a channel/DM) and/or a recall match over
+ * the given phrasings (rank among open items, matched terms). `confidence:
+ * high` only for an exact source match, or the single conversation match the
+ * phrasing also picks out at rank 1 with matched terms — everything else is a
+ * `candidate` the caller must confirm. With neither flag nor phrasing, every
+ * open item is listed.
+ */
+async function cmdOpen(argv: string[]) {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: {
+      source: { type: "string" },
+      person: { type: "string" },
+      team: { type: "string" },
+      tag: { type: "string" },
+      since: { type: "string" },
+      until: { type: "string" },
+      graph: { type: "string" },
+      limit: { type: "string" },
+      format: { type: "string" },
+      "index-slot": { type: "string" },
+    },
+    allowPositionals: true,
+  });
+  applyIndexSlotFlag(values);
+  const format = ((values.format as string | undefined) ?? "text").toLowerCase();
+  if (format !== "text" && format !== "json") throw new Error("--format must be one of: text, json");
+  const queries = positionals.map((q) => q.trim()).filter(Boolean);
+  // Same normalization as `add` (lowercase scheme); a bare scheme (`slack`) is rejected there.
+  const prefixes = list(values.source as string).map((p) => normalizeSourceId(p.replace(/:+$/, "")));
+  const limit = positiveInt(values.limit, 20, "--limit");
+  const filters = await filtersFrom(values);
+
+  const catalog = await openCatalog();
+  const chainIndex = buildChainIndex(await catalog.linked());
+  const isOpen = (e: Pick<MemoryEntry, "id" | "type">) => entryStatus(e, chainIndex)?.status === "open";
+  const openTypes = [...OPEN_TYPES];
+  const ofType = await Promise.all(openTypes.map((type) => catalog.filter({ ...filters, type })));
+  const open = ofType.flat().filter(isOpen);
+
+  type SourceEvidence = { id: string; scope: "exact" | "conversation" };
+  type QueryEvidence = { rank: number; score: number; terms: string[] };
+  type Row = { id: string; type: string; date: string; title: string; people: string[]; graphs: string[];
+    source_ids: string[]; path: string; snippet?: string;
+    evidence: { source?: SourceEvidence; query?: QueryEvidence }; confidence: "high" | "candidate" };
+  const rows = new Map<string, Row>();
+  const row = (e: (typeof open)[number]): Row => {
+    const r = rows.get(e.id) ?? { id: e.id, type: e.type, date: e.date, title: e.title, people: e.people,
+      graphs: e.graphs, source_ids: e.source_ids ?? [], path: rel(e.path), evidence: {}, confidence: "candidate" };
+    rows.set(e.id, r);
+    return r;
+  };
+
+  // Uniqueness is judged over EVERY open item, never the filtered ones: a
+  // --person/--graph/--since that hides the thread's other open ask must not
+  // turn an ambiguous prefix into `exact` (which the skills settle unattended).
+  const narrowed = Object.values(filters).some((v) => v !== undefined);
+  const everyOpen = prefixes.length > 0 && narrowed
+    ? (await Promise.all(openTypes.map((type) => catalog.filter({ type })))).flat().filter(isOpen)
+    : open;
+  const matchesIn = (entries: typeof open, p: string) =>
+    entries.flatMap((e) => {
+      const id = (e.source_ids ?? []).find((s) => sourceIdMatches(s, p));
+      return id ? [{ e, id }] : [];
+    });
+
+  for (const p of prefixes) {
+    const matches = matchesIn(open, p);
+    const unique = matchesIn(everyOpen, p).length === 1;
+    // Exact: the prefix IS the anchor, or names a thread/message only one open item lives in.
+    for (const { e, id } of matches) {
+      const scope = id === p || (p.split(":").length >= 3 && unique) ? "exact" : "conversation";
+      const r = row(e);
+      if (r.evidence.source?.scope !== "exact") r.evidence.source = { id, scope };
+    }
+  }
+  if (queries.length > 0) {
+    // One exhaustive recall per open type: the type filter keeps other types
+    // from crowding todos out, and covering every entry of the type keeps
+    // resolved ones from doing the same. Scores from the two runs aren't
+    // comparable, so ranks are per type.
+    const byId = new Map(open.map((e) => [e.id, e]));
+    // Recall's filter expansion adds the type name ("todo") as a phrase — only
+    // terms from the caller's own phrasings count as evidence.
+    const asked = keywordPhrase(queries.join(" ")).split(" ").filter(Boolean);
+    const reports = await Promise.all(openTypes.map((type, i) => recall(queries, {
+      filters: { ...filters, type }, k: Math.max(ofType[i]!.length, 1), deep: true,
+      completeness: "complete", completeLimit: Math.max(ofType[i]!.length, 1),
+    })));
+    for (const report of reports) {
+      report.hits.filter((h) => byId.has(h.id)).forEach((h, i) => {
+        const terms = (h.reasons?.matchedTerms ?? []).filter((t) => asked.some((a) => a.startsWith(t) || t.startsWith(a)));
+        // Exhaustive runs return every open item; only a lexical match or a top rank is evidence.
+        if (terms.length === 0 && i >= OPEN_SEMANTIC_TOP) return;
+        // With --source the phrasing ranks the conversation's items; it doesn't add other conversations.
+        if (prefixes.length > 0 && !rows.has(h.id)) return;
+        const r = row(byId.get(h.id)!);
+        r.evidence.query = { rank: i + 1, score: Number(h.score.toFixed(4)), terms };
+        if (h.bestChunk) r.snippet = h.bestChunk.slice(0, 240);
+      });
+    }
+  } else if (prefixes.length === 0) {
+    for (const e of open) row(e);
+  }
+
+  const all = [...rows.values()];
+  // A person's name matches every ask in their DM — it is not evidence about the matter.
+  // A term is a name only if it equals a name part or is its stem (at most 2 chars shorter):
+  // "market" is not "mark", "level" is not "levi", "deploy" is not "de".
+  const isName = (t: string, part: string) =>
+    part === t || (t.length >= 4 && part.startsWith(t) && part.length - t.length <= 2);
+  const topical = (r: Row) => (r.evidence.query?.terms ?? []).some((t) =>
+    !r.people.some((slug) => slug.split("-").some((part) => isName(t, part))));
+  const both = all.filter((r) => r.evidence.source && topical(r));
+  for (const r of all) {
+    const q = r.evidence.query;
+    if (r.evidence.source?.scope === "exact" || (both.length === 1 && both[0] === r && q)) r.confidence = "high";
+  }
+
+  // High confidence first, then source evidence, then matched terms, then per-type rank, then newest.
+  const rankOf = (r: Row) => r.evidence.query?.rank ?? Number.MAX_SAFE_INTEGER;
+  const sorted = all.sort((a, b) =>
+    Number(b.confidence === "high") - Number(a.confidence === "high") ||
+    Number(Boolean(b.evidence.source)) - Number(Boolean(a.evidence.source)) ||
+    (b.evidence.query?.terms.length ?? 0) - (a.evidence.query?.terms.length ?? 0) ||
+    rankOf(a) - rankOf(b) || b.date.localeCompare(a.date),
+  );
+  const shown = sorted.slice(0, limit);
+
+  if (format === "json") {
+    console.log(JSON.stringify({ total: sorted.length, shown: shown.length, items: shown }, null, 2));
+    return;
+  }
+  if (shown.length === 0) {
+    console.log("(no matching open items)");
+    return;
+  }
+  for (const r of shown) {
+    const ev = [
+      r.evidence.source ? `source ${r.evidence.source.scope} ${r.evidence.source.id}` : "",
+      r.evidence.query ? `query #${r.evidence.query.rank}${r.evidence.query.terms.length ? ` (${r.evidence.query.terms.join(", ")})` : ""}` : "",
+    ].filter(Boolean).join("; ");
+    console.log(`${r.date}  ${r.type.padEnd(16)} ${r.title}${graphSuffix(r)}  [${r.confidence}${ev ? `: ${ev}` : ""}]`);
+    console.log(`    ${r.id}  (${r.path})`);
+  }
+  const of = sorted.length > shown.length ? ` of ${sorted.length}` : "";
+  console.log(`\n${shown.length}${of} open item${sorted.length === 1 ? "" : "s"} — confirm each, then settle with: memory add … --follows <id,…>`);
+}
+
 async function cmdPerson(argv: string[]) {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -1294,6 +1496,9 @@ Usage:
   memory link <id> --follows <earlier-id,…>
             # add timeline links to an existing entry (e.g. a decision settling a pending-decision)
             # containment is enforced: a shared-graph entry only references fellow members
+  memory unlink <id> --follows <earlier-id,…>
+            # remove wrong timeline links (an outcome chained to an item it doesn't settle);
+            # the earlier entry shows [open] again unless something else follows it
   memory remove <id>   # delete ALL of an entry's copies + sync index (content stays in each repo's history)
   memory copy <id> --to <graph>
             # add membership: materialize the entry into another graph (it stays private too);
@@ -1324,6 +1529,10 @@ Usage:
             # --graph <name> scopes to one graph's members; default searches ALL (shared memberships labeled)
             # --index-slot <name>: query another built index slot (A/B before \`index --activate\`); MEMORY_INDEX_SLOT=<name> does the same
   memory list [--person|--type|--team|--tag|--since|--until|--graph|--limit]
+  memory open ["<phrasing>" …] [--source <prefix,…>] [--person X] [--since DATE] [--graph G] [--limit N] [--format text|json]
+            # unresolved todo / pending-decision entries a new capture may settle (pass confirmed ids to --follows);
+            # --source: narrowest prefix first (slack:C1:<thread_ts> = exact; slack:D123 = whole conversation);
+            # each row shows its evidence + confidence (high|candidate); --since/--until filter the OPEN item's date
   memory person <slug> [--graph <name>]
   memory digest --person <slug> | --quarter <YYYY-Qn> | --tag <slug> [--graph <name>]
             # shared-graph digest: candidates restricted to that graph's members; written there (id summary-<graph>-…)
@@ -1362,6 +1571,7 @@ async function main() {
   switch (cmd) {
     case "add": return cmdAdd(rest);
     case "link": return cmdLink(rest);
+    case "unlink": return cmdUnlink(rest);
     case "remove": return cmdRemove(rest);
     case "move": return cmdMove(rest);
     case "copy": return cmdCopy(rest);
@@ -1371,6 +1581,7 @@ async function main() {
     case "query": return cmdQuery(rest);
     case "recall": return cmdRecall(rest);
     case "list": return cmdList(rest);
+    case "open": return cmdOpen(rest);
     case "person": return cmdPerson(rest);
     case "digest": return cmdDigest(rest);
     case "maintenance": return cmdMaintenance(rest);

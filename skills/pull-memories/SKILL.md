@@ -78,6 +78,12 @@ index files, and the entry paths that CLI output cites.
      (the CLI auto-applies them and prints `→ rule: copied …` lines — include
      those in the report) or the user-confirmed promotion review
      (`/promote --to <graph>`), never by your judgment during a sweep.
+   - If the item reports an **outcome** (an answer, approval, completion),
+     check what it settles: `npx tsx src/cli.ts open "<outcome>" --source
+     <thread prefix, else channel>` → pass only `high`-confidence ids as
+     `--follows` during a sweep (list `candidate`s in the report for the
+     user), and anchor the outcome on the reply's own id, not the thread
+     root (see "Settlements that happen outside memory" in `log-memory`).
    - `npx tsx src/cli.ts add --title … --type … --people … --source-ids <id> --body …`
    - `memory add` records `<name>.last_captured` automatically when the source
      id prefix matches a known connector. Re-fetched items stay in their
