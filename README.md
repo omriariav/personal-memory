@@ -1,20 +1,89 @@
 <p align="center">
   <img src="docs/assets/memory-graph.png" alt="Sanitized Personal Memory graph view" width="900">
-  <br>
-  <em>Sanitized demo graph view.</em>
 </p>
 
-# Personal Memory
+<h1 align="center">Personal Memory</h1>
 
-Personal Memory is a local-first RAG memory store for people, projects,
-decisions, meetings, incidents, hiring context, and long-running work history.
-It gives agents such as Codex and Claude Code a grounded way to remember and
-recall context without sending your private memory corpus to a hosted service.
+<p align="center">
+  <strong>Local-first memory for your working life.</strong><br>
+  Private by default, shareable on purpose.
+</p>
 
-Markdown is the source of truth. The search index is rebuildable. Embeddings run
-locally by default.
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
+  <img alt="Node 20+" src="https://img.shields.io/badge/node-%E2%89%A520-brightgreen">
+  <img alt="Local-first" src="https://img.shields.io/badge/data-stays%20on%20your%20disk-0b0b0b">
+</p>
 
-## Quick Start
+---
+
+Six months of work produces context that never fits in chat history: who said
+what in a 1:1, why a decision went the way it did, what the last incident
+actually taught you, which hiring thread is still open.
+
+Personal Memory keeps that record on your own disk as Markdown, and gives your
+coding agent a grounded way to write to it and recall from it. There is no SDK
+to integrate and no service to sign up for — you talk to the agent you already
+have open.
+
+<p align="center">
+  <img src="docs/assets/capture-recall.gif" alt="Logging a pending decision, recalling an earlier one, and listing what is still open" width="900">
+</p>
+
+Look at the second result. The question *"Kafka or RabbitMQ?"* was settled in
+April, and recall says so — `⤷ superseded by`, `status: resolved by` — instead
+of handing back a seven-month-old snapshot as if it were current.
+
+## Private by default
+
+Your working record is the most sensitive material you would ever give an AI.
+So none of it leaves:
+
+- Every capture lands in `memory/`, ignored by this repository and versioned in
+  its own local git repo. `git pull` on the project cannot touch an entry.
+- Embeddings run on your machine (`Xenova/bge-small-en-v1.5`). No API backend is
+  used unless you deliberately set `MEMORY_EMBEDDINGS`.
+- The UI binds to `127.0.0.1`.
+- `.index/` is derived state and can be deleted and rebuilt at any time.
+- No account, no hosted tier, no telemetry, nothing to opt out of.
+
+Don't publish a populated `memory/` directory, or screenshots of one, unless
+you have intentionally sanitized them.
+
+## Shareable on purpose
+
+Eventually you want someone to have *part* of the record — a team, a successor,
+the person taking over a project. The hard part of sharing memory is not sending
+it. It's knowing that what you send doesn't leak what you didn't.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/graph-flow-dark.svg">
+    <img src="docs/assets/graph-flow-light.svg" alt="Every capture lands in the default graph. Entries you promote are copied into a named shared graph that cannot reference anything you did not promote." width="900">
+  </picture>
+</p>
+
+A **named graph** is a physically separate directory with its own git repo.
+Entries reach one only by your decision: a standing rule for a tag or type, or a
+promotion review where you confirm entries one at a time. The 1:1s, the hiring
+debriefs and the feedback stay at home unless you say otherwise.
+
+And a shared graph is **self-contained** — an entry in it may only reference
+fellow members. That's enforced on write, not left to discipline:
+
+<p align="center">
+  <img src="docs/assets/private-to-shared.gif" alt="Creating a graph, reviewing candidates, containment refusing an entry whose chain would dangle, and recall scoped to the shared graph" width="900">
+</p>
+
+The decision is refused until its pending-decision comes too, because a dangling
+reference out of a shared graph is exactly the kind of leak you cannot see by
+reading the files. At the end, asking that graph about a private 1:1 returns
+work artifacts and nothing else — the entry simply isn't in there.
+
+You hand the directory over yourself: push its repo, or copy it. There is no
+sync service in the middle, which is the point.
+
+## Quick start
 
 Requires Node.js 20 or newer.
 
@@ -26,588 +95,83 @@ npm run index
 npm start
 ```
 
-`npm start` opens the local UI at `http://127.0.0.1:4664`.
-
-To start and stop the UI server from any terminal, link the `memui` helper onto
-your `PATH`:
-
-```bash
-ln -s "$PWD/scripts/memui.sh" ~/.local/bin/memui
-memui            # interactive menu: start / stop / restart / open / logs
-memui status     # or: start | stop | restart | open | logs | home
-```
-
-The server runs in the background (logs in `~/.cache/memui/`). `MEMORY_HOME`
-picks the store and `MEMUI_PORT` the port.
-
-## Use It
-
-Open Claude Code or Codex with this repository as the working directory, then
-ask naturally. The agent reads the repo instructions, uses the memory skills,
-and calls the local CLI behind the scenes.
-
-```bash
-cd personal-memory
-claude
-```
-
-Or open this folder as the workspace in Codex.
-
-### Use it from any project (plugin marketplace)
-
-The memory skills also ship as a plugin, so capture-worthy moments in
-*other* repos ("remember that we decided X" mid-review) don't require
-switching sessions. The repo itself is the marketplace — one manifest serves
-both CLIs:
-
-```bash
-# Claude Code (inside a session)
-/plugin marketplace add vladimanaev/personal-memory
-/plugin install personal-memory@personal-memory
-
-# Codex
-codex plugin marketplace add https://github.com/vladimanaev/personal-memory
-codex plugin add personal-memory@personal-memory
-```
-
-> Install from Git (as above), not from a local path: a local-path
-> marketplace add copies the working tree verbatim into the plugin cache —
-> including the private, gitignored `memory/` store. A Git add clones tracked
-> content only.
-
-Then tell the installed skills where your clone lives (the CLI resolves the
-store from its working directory):
-
-```bash
-# in your shell profile
-export MEMORY_HOME="$HOME/path/to/personal-memory"
-```
-
-Inside the personal-memory repo the skills keep working as before —
-`MEMORY_HOME` is only consulted when you're elsewhere.
-
-Capture:
+`npm start` opens the UI at `http://127.0.0.1:4664`. It will be empty — it's a
+record browser, not a welcome wizard. Fill it by opening the folder in your
+agent and talking:
 
 ```text
-"Log this 1:1 with Jane: promotion readiness, scope gaps, and a follow-up for next Friday."
-"Remember that the platform team decided to defer project alpha until Q4."
-"Capture this incident summary and tag it with reliability."
-```
+"Log this 1:1 with Jane: promotion readiness, scope gaps, a follow-up for Friday."
+"Remember that the platform team deferred project alpha until Q4."
 
-Recall:
-
-```text
 "What do I know about Jane's promotion readiness?"
-"Find the decision we made about project alpha."
-"Help me prep for my next 1:1 with Jane using memory."
-```
-
-Plan with memory:
-
-```text
-"Use memory to summarize open hiring threads from this quarter."
-"What context should I remember before the roadmap review?"
-"Pull the relevant history before we decide whether to revisit project alpha."
-```
-
-Pull from connected sources:
-
-```text
-"Pull recent memories from Gmail, Slack, and Google Chat."
-"Use the connector settings to ingest memory-worthy updates from the last week."
-"Every 4 hours, pull Gmail and Slack and log anything memory-worthy."
-```
-
-Connector pulls use the skill system and connector prompts to fetch, filter,
-deduplicate, and update memories over time.
-
-Track a matter over time:
-
-```text
-"Log that the queue technology decision is still pending — Kafka vs RabbitMQ."
-"Remember we decided on Kafka; this settles the pending queue decision."
 "Is the queue technology decision still open?"
+"Help me prep for my next 1:1 with Jane."
 ```
 
-When a memory develops or settles an earlier one, the agent links them with a
-`follows` chain. Recall then annotates any stale chain member with the entry
-that superseded it (a same-type successor, or a decision that closed an open
-item) and ranks it lower; a member that was merely extended (a meeting after a
-decision) stays current and points at the later developments. Open pending
-decisions and todos report whether they were resolved — so an old snapshot can
-never masquerade as the current state.
-
-Agents should retrieve through the local memory CLI, write through `memory add`,
-and cite the memory files they used. The full agent contract is in
-[AGENTS.md](AGENTS.md).
-
-## Why This Exists
-
-Long-running work creates context that does not fit in chat history: people,
-decisions, feedback, planning threads, hiring notes, operational incidents, and
-follow-ups. Personal Memory keeps that context in a local, queryable record that
-an agent can retrieve before answering.
-
-Key properties:
-
-- **Local-first**: entries, index, and default embeddings stay on disk.
-- **Plain Markdown**: every memory is readable and portable.
-- **Hybrid retrieval**: semantic search, BM25 lexical search, and rank fusion.
-- **Structured filters**: query by person, team, tag, date, and memory type.
-- **Deduped capture**: source IDs and near-duplicate checks avoid noisy repeats.
-- **Timeline chains**: evolving matters (note → pending decision → decision) are
-  linked, so recall surfaces the latest state instead of a stale snapshot.
-- **Agent-native**: skills and guardrails tell agents when to capture or recall.
-- **Local UI**: browse, search, inspect the graph, and edit connector and
-  reference-source config.
-
-## CLI Reference
-
-Most users should interact with Personal Memory through an agent. The CLI is the
-local engine that agents call, and it is useful when debugging, scripting, or
-checking connector/index health.
-
-```text
-memory add --title "..." --type <type> [--people a,b] [--teams x,y]
-           [--tags a,b] [--date YYYY-MM-DD] [--body "..."]
-           [--source-ids slack:C123:1700000000.1,gmail:<thread-id>]
-           [--connector raw-capture]
-           [--follows <earlier-id,...>]
-           [--update <id>] [--force-new]
-
-memory link <id> --follows <earlier-id,...>
-
-memory query "<question>" ["<alternate phrasing>" ...]
-             [--person slug] [--type type] [--team slug] [--tag slug]
-             [--since YYYY-MM-DD] [--until YYYY-MM-DD] [-k n] [--deep]
-
-memory recall "<question>" ["<agent phrasing>" ...]
-              [--person slug] [--type type] [--team slug] [--tag slug]
-              [--since YYYY-MM-DD] [--until YYYY-MM-DD] [-k n]
-              [--complete | --complete-if-small | --no-complete]
-              [--require-complete] [--no-expand] [--format text|json]
-
-memory list [--person slug] [--type type] [--team slug] [--tag slug]
-            [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit n]
-
-memory person <slug> [--graph <name>]
-memory digest --person <slug> | --quarter <YYYY-Qn> | --tag <slug> [--graph <name>]
-memory remove <id>
-memory copy <id> --to <graph>
-memory move <id> --to <graph>
-memory graphs [list] | graphs create <slug> | graphs sync [--dry-run]
-memory rules [list] | rules apply [--dry-run]
-memory promote candidates --to <graph> | promote dismiss <id> --graph <g>
-memory maintenance [--threshold n]
-memory connectors
-memory connectors mark-pulled <name> [--at ISO_TIMESTAMP]
-memory connectors mark-captured <name> [--at ISO_TIMESTAMP]
-memory sources
-memory ui [--port n] [--no-open]
-```
-
-For debugging, run those commands as `npm run memory -- <command>`.
-
-Supported memory types:
-
-```text
-event, decision, todo, pending-decision, 1on1, hiring, incident,
-achievement, feedback, meeting, note, summary
-```
-
-## How It Works
-
-Personal Memory separates durable content from derived search state, and
-organizes the durable content into graphs:
-
-- `memory/entries/YYYY/MM/<id>.md` is the **default graph** — secret,
-  local-only, and the home of every capture. If you never create another
-  graph, everything simply lives here.
-- `memory-graphs/<slug>/entries/YYYY/MM/<id>.md` stores each named SHARED
-  graph — physically separate stores (each its own nested git repo)
-  deliberately safe to hand to a specific audience. None ship built-in: you
-  create them with `memory graphs create <slug>` or the UI's Graphs screen,
-  and each carries a `GRAPH.md` manifest (description + eligibility notes,
-  seeded from a template). One memory can be a member of several graphs —
-  the CLI materializes byte-identical synced copies, with the default graph
-  always the home. Capture always lands in the default graph; entries enter
-  shared graphs through per-tag/per-type distribution rules (configured in
-  the UI, dry-run preview, auto-applied to future captures), a
-  user-confirmed promotion review (`/promote --to <graph>`), or an explicit
-  request. Recall spans all graphs by default (`--graph <name>` narrows);
-  every shared store is self-contained — its entries never reference
-  non-members.
-- `memory/summaries/<id>.md` stores additive summaries created by `digest`.
-- `.index/` stores rebuildable local search artifacts: the legacy index at the
-  root plus optional new-format slots under `.index/slots/<name>/`
-  (`memory index slots`); user judgment such as connector timestamps and
-  dismissals lives in root sidecars that every slot shares.
-- `connectors/<name>.md` stores public connector templates.
-- `memory/connectors/<name>.md` stores private connector overrides.
-- `sources/<name>.md` stores public reference-source templates.
-- `memory/sources/<name>.md` stores private reference-source overrides.
-
-Each entry has strict YAML frontmatter:
-
-```yaml
-id: 2026-06-28-acme-kickoff
-date: 2026-06-28
-type: meeting
-title: Kickoff with Acme
-people: [jane-doe, john-smith]
-teams: [platform-team]
-tags: [roadmap, partnership]
-source_ids: [slack:C0123ABCD:1700000000.0012]
-follows: [2026-06-20-acme-partnership-pending]
-```
-
-### Timeline chains
-
-The optional `follows` field links an entry to the earlier entries it develops
-or settles, forming a chain per evolving matter. Everything else is derived at
-read time — nothing to keep in sync:
-
-- Recall and query hits carry the chain context: stale members are annotated
-  with `⤷ superseded by: <id>`, still-current members with later additions
-  with `↳ extended by: <id>`, and pending decisions and todos report
-  `status: open` or `status: resolved by <id>` (also in `--format json`).
-- Ranking gets a mild recency boost (at most +2%, decaying over ~3 months), so
-  newer entries win near-ties without burying strong older matches.
-- `memory maintenance` reports **dangling links** — entries whose `follows`
-  points at an id that no longer exists — so a broken chain never goes unnoticed.
-- The UI shows each chained entry's full timeline in its detail panel, and the
-  graph view draws chains as dashed edges between entries.
-
-Links are validated at write time (targets must exist, must not be newer, and
-cycles are rejected). Settle an open matter by logging a new linked entry, not
-by rewriting the old one — the history stays intact.
-
-### Reference sources
-
-The people/team graph is built from what agents write in frontmatter, so slug
-quality normally rests on heuristics. A reference source gives it ground truth:
-an authoritative directory you already have — a company directory, an LDAP/HR
-export, a contacts API, a hand-kept CSV — exposed to the store as a local
-lookup command.
-
-> **Off by default — nothing runs until you turn one on.** The repo ships a
-> single template, `sources/people-directory.md`, with `enabled: false` and a
-> placeholder command. A fresh clone consults no directory, runs no command,
-> and behaves exactly as it did before this feature existed. Enabling a source
-> is a deliberate, two-part act: point it at a lookup command that works on
-> your machine, *and* set `enabled: true`.
-
-Sources follow the connector layering: `sources/<name>.md` is the generic
-git-tracked template, and a private `memory/sources/<name>.md` override
-(gitignored) carries the real command. The frontmatter declares the lookup
-contract; the body tells agents when to consult it:
-
-```yaml
-name: people-directory
-kind: person             # what this source resolves: person | team
-enabled: false           # ships false; flip it once the command below works
-lookup:
-  command: "my-directory lookup {query}"   # prints a JSON array of matches
-  refresh: "my-directory sync"             # optional: refresh a local cache
-  cache_ttl_days: 14
-```
-
-The command receives `{query}` shell-quoted and prints a JSON array of matches,
-minimally `[{"name": "Jane Doe", "id": "jdoe", "title": "…", "team": "…"}]`.
-It is user-supplied and local-first — the store never ships credentials or
-fetches anything itself.
-
-**At most one source is active at a time.** Reconciliation consults a single
-source, so a second enabled one is never read — it would sit there looking
-active while doing nothing, and a file whose name sorts earlier would silently
-shadow the one that works. Enabling a source therefore turns off any other:
-the UI asks first and names what it will switch off, and the rule is enforced
-server-side, so hand-edited frontmatter can't get around it. Zero enabled
-sources is the default and a perfectly good state.
-
-**Managing them in the UI.** The Sources screen (`#/sources`) lists every
-resolved source with its kind, where it resolved from, whether it is enabled,
-and its lookup command — and flags any file that fails validation. A disabled
-source carries a `DISABLED` badge in the list, and its detail screen leads with
-an enabled/disabled switch that says what the state means: *"consulted by
-nothing — the command never runs"* versus *"consulted during `maintenance`; its
-command will run"*. Flipping the switch rewrites only that one frontmatter line
-— the command, its comments, and the agent guidance all survive — and the
-switch is unavailable on a file that doesn't parse.
-
-Opening a source also edits it as raw Markdown; saving always writes the
-private override in `memory/sources/`, never the git-tracked template. A source
-created from the UI starts `enabled: false`, so a half-written command can
-never go live by accident.
-
-There is no "test this lookup" button, and no endpoint that runs a command you
-type — the Sources screen only reads and writes files. Be aware, though, that
-an enabled source's command *is* executed whenever the maintenance audit is
-rebuilt: `memory maintenance`, the scheduled run, and any UI action that
-refreshes the audit (a slug merge, a dismissal, a chain link). That is the
-point of the feature, but it means enabling a source means a local command of
-yours runs on those events.
-
-Where the store uses it:
-
-- **`memory maintenance` slug hygiene**: before reporting a person/team merge
-  suggestion, both slugs are looked up. Two matches with differing stable ids
-  → the suggestion is auto-dismissed (recorded in the audit with the
-  evidence); the same identity → its confidence is boosted. Matches without
-  ids can only confirm, never refute. A disabled source, failed command, or
-  non-JSON output degrades silently to today's heuristics — the same
-  reconciliation runs wherever the audit is rebuilt (CLI, UI, scheduled
-  maintenance). Auto-dismissed pairs are not hidden: the Maintenance screen
-  lists them under their own heading with the directory's reasoning, and keeps
-  the normal merge/ignore actions so a wrong dismissal can be overridden.
-- **Agent slug minting**: agents consult an enabled source before minting a
-  new person/team slug. Exactly one match mints from the canonical directory
-  name (tagged `slug-minted-from-directory`); zero or multiple matches mint
-  exactly as they would with no source — derived from the name as given, and
-  offered for confirmation. A source decides *which* slug gets minted, never
-  *whether* one does, so a person your directory has never heard of still
-  gets one. See [AGENTS.md](AGENTS.md).
-
-Sources never gate a write — capture stays immediate; they only make
-suggestions and repairs smarter. `memory sources` lists and validates the
-resolved files.
-
-The index combines:
-
-- local embeddings via Transformers.js
-- LanceDB for vector search
-- persistent BM25 lexical search
-- reciprocal rank fusion
-- metadata prefilters and source-of-truth validation
-
-Rebuild the index at any time:
-
-```bash
-npm run memory -- index --rebuild   # rebuild every built slot's catalog/lexical tables, vectors reused
-rm -rf .index                       # full reset: drops the vectors and the root sidecars too
-npm run index -- --force
-```
-
-## Upgrading an existing memory store to the new code
-
-Pulling the multi-graph code onto a machine with an existing store is safe by
-construction: every store is gitignored and versioned in its own nested repo,
-so `git pull` cannot touch a single entry file, and **every existing memory
-stays exactly where it is** — membership is derived from file locations, so
-nothing inside `memory/` needs migrating or reclassifying. Take a backup
-first anyway (good practice before any migration):
-
-```bash
-tar -czf ~/memory-backup-$(date +%Y%m%d).tgz memory memory-public memory-graphs 2>/dev/null \
-  || tar -czf ~/memory-backup-$(date +%Y%m%d).tgz memory
-```
-
-Then run the (idempotent) migration — the engine refuses to run on an old
-layout until it has:
-
-```bash
-git pull
-npx tsx scripts/migrate-graphs.ts
-```
-
-Or use the all-in-one wrapper, which creates and verifies a private backup,
-fast-forwards from the configured upstream when possible, installs dependencies,
-runs the migration, and prints the resulting graph registry:
-
-```bash
-./scripts/migrate.sh
-```
-
-It never pushes commits or memory data to a remote. Run
-`./scripts/migrate.sh --help` for options such as `--no-update`,
-`--skip-install`, and a custom backup directory.
-
-Keep this wrapper as the stable entry point for future project migrations:
-new migration steps can be added behind the same backup-first command instead
-of requiring users to assemble a new upgrade sequence for every release.
-
-The backup includes the complete graph-store layout: `memory/`, the legacy
-`memory-public/` store when present, and every named graph under
-`memory-graphs/`. It also preserves the `.index/` files no rebuild can
-recreate: connector timestamps, promotion/chain/slug dismissals, deferred slug
-proposals, `maintenance-state.json`, `graph-maintenance.json`, and the
-`active.json` that names the active index slot; search tables and caches
-remain rebuildable. A restored `active.json` naming a slot that was not in the
-archive falls back to the legacy root index with a warning until
-`npx tsx src/cli.ts index --build <slot>` rebuilds it. Validate or restore one
-of those archives with:
-
-```bash
-./scripts/restore_backup.sh ../personal-memory-backups/personal-memory-<timestamp>.tgz --dry-run
-./scripts/restore_backup.sh ../personal-memory-backups/personal-memory-<timestamp>.tgz --confirm
-```
-
-Restore validates paths and archive integrity before replacing anything, makes
-another verified backup of the current stores and workflow state, and restores
-the archive as one complete layout. For the current layout it rebuilds the
-derived index when Node.js 20+ and local dependencies are available; otherwise
-it prints the commands to run later. If a later step fails, it rolls the
-original stores and complete prior index back automatically. An archive
-containing the legacy `memory-public/` layout is restored exactly without an
-index rebuild—the CLI remains unavailable until that layout is migrated again
-with `./scripts/migrate.sh`.
-
-What it does depends on where you're coming from:
-
-- **From the original single-graph layout** (just `memory/`): nothing
-  relocates — all your memories are in the `default` graph by construction.
-  The script checkpoints `memory/.git` and rebuilds the search index (the
-  new format has a membership column; a few minutes, once).
-- **From the two-graph layout** (`memory-public/` exists): if it holds
-  entries, the script relocates it to `memory-graphs/public/` — a plain
-  directory rename, its git history moves with it — and writes it a
-  `GRAPH.md` manifest; afterwards `public` is an ordinary named graph like
-  any you create yourself (deletable anytime via the Graphs screen or
-  `memory graphs delete public --confirm`). An EMPTY public store is simply
-  dropped — no graph ships by default.
-- Re-running the script is always a no-op; it finishes with a consistency
-  check (`memory graphs sync --dry-run`).
-
-Vocabulary changes to be aware of: the home graph is now named `default`
-(`--graph private` is now `--graph default`); `promote` and `recall-graph`
-take an explicit graph name; the routing prompt is gone — per-graph
-eligibility criteria live in each graph's `GRAPH.md`. Marketplace/plugin
-users: update the clone `MEMORY_HOME` points at before using the new
-`graphs`/`copy`/`rules` commands.
-
-### Switching to the next-format index (optional)
-
-Stores above ~2,000 entries benefit from the new-format index: metadata and a
-pre-tokenized lexical column live in catalog tables, so a command filters and
-ranks without re-parsing every file and reads bodies only for its hits. It is
-never built in place and never forced — an existing store keeps reading its
-legacy index until you activate a slot:
-
-```bash
-npx tsx src/cli.ts index --build next            # complete second index beside the current one; existing vectors reused, nothing re-embedded
-npx tsx src/cli.ts recall "…" --index-slot next  # try it (MEMORY_INDEX_SLOT=next does the same for every command)
-npx tsx src/cli.ts index slots                   # what exists, and which slot is active
-npx tsx src/cli.ts index --activate next         # switch; the old index stays as 'previous'
-npx tsx src/cli.ts index --activate previous     # roll back any time
-npx tsx src/cli.ts index --prune --confirm       # once satisfied: drop the non-active slots' derived artifacts
-```
-
-**Fresh stores start on the new format.** A tree with no `.index/` at all is
-built straight into `.index/slots/main/` (no `active.json`, no legacy root),
-so its `meta.json` lives at `.index/slots/main/meta.json`, not `.index/meta.json`.
-Anything that embeds the CLI should not poll the root file: ask `memory index
-slots`, `memory maintenance`, or `indexStatus()` (which report the resolved
-slot and whether it is built) instead of a fixed path. Only stores that already
-had a legacy root keep it as the default until a slot is activated.
-
-The gain is on the READ path. Writers still parse every entry through the
-root parse cache, and the `files` table has no reader yet, so `add` costs the
-same on a new-format slot as on the legacy one; a scoped writer sync that
-reads that table to decide what changed is the planned follow-up.
-
-Writers (`add`, `copy`/`move`/`remove`/`link`, slug merges) keep every built
-slot in sync, so `next` never goes stale while you compare. Reads refuse a
-new-format slot that has no index yet rather than answering from nothing;
-`npx tsx src/cli.ts index` builds it. `--prune` never touches the judgment
-sidecars at the `.index/` root, and refuses the active slot.
-`./scripts/migrate.sh --build-next-index` builds the slot as part of a
-backup-first upgrade and never activates it. `memory maintenance` lists the
-slots and prints a one-line hint when the store is large and only the legacy
-index exists. Fresh stores (no `.index/` yet) skip all of this and build the
-new format directly as slot `main`.
-
-New-format slots score their lexical leg exactly like the legacy index by
-default. `MEMORY_LEXICAL=fts` swaps in LanceDB's full-text index, which is
-faster but not yet rank-identical — the measurements and the decision are in
-[docs/eval/fts-spike.md](docs/eval/fts-spike.md).
-
-## Privacy
-
-The default setup is intentionally local:
-
-- `memory/` and `memory-graphs/` are ignored by the main git repository
-  (every store is versioned in its own local nested git repo).
-- Graph separation is physical: each shareable unit is one
-  `memory-graphs/<slug>/` directory alone, and nothing in it may reference
-  anything outside that graph — not even an entry id.
-- `.index/` is ignored and can be regenerated.
-- The UI binds to `127.0.0.1`.
-- Embeddings run locally with `Xenova/bge-small-en-v1.5`.
-- No API backend is used unless you explicitly set `MEMORY_EMBEDDINGS`.
-
-Optional remote embedding backends can be enabled deliberately:
-
-```bash
-MEMORY_EMBEDDINGS=openai npm run index -- --force
-MEMORY_EMBEDDINGS=voyage npm run index -- --force
-```
-
-Indexing embeds text in batches of 64 — one model call or API request per
-batch (set `MEMORY_EMBED_BATCH=<n>` to change it) — so peak memory stays
-bounded as the store grows.
-
-Do not publish a populated `memory/` directory or screenshots containing private
-names, events, or relationships unless you have intentionally sanitized them.
-
-## Agent Workflows
-
-This repository is designed for coding agents that operate over the local
-folder. The important conventions live in:
-
-- [AGENTS.md](AGENTS.md) - shared rules for capture, recall, citations, and
-  local-only use
-- [MEMORY-GUARDRAILS.md](MEMORY-GUARDRAILS.md) - write safety contract for
-  `memory/`
-- [skills/log-memory/SKILL.md](skills/log-memory/SKILL.md) - creating or
-  updating memories
-- [skills/recall-memory/SKILL.md](skills/recall-memory/SKILL.md) - retrieving
-  grounded context (both graphs)
-- [skills/recall-graph/SKILL.md](skills/recall-graph/SKILL.md) - single-graph
-  recall for shareable output
-- [skills/promote-graph/SKILL.md](skills/promote-graph/SKILL.md) - user-confirmed
-  promotion of memories into named shared graphs
-- [skills/manage-graphs/SKILL.md](skills/manage-graphs/SKILL.md) - graph
-  creation, distribution rules, and consistency repair
-- [skills/compact-tags/SKILL.md](skills/compact-tags/SKILL.md) - merging
-  similar/duplicate tags with per-merge confirmation
-- [skills/morning-brief/SKILL.md](skills/morning-brief/SKILL.md) - read-only
-  morning brief: calendar, open loops, meeting prep from memory
-- [.claude/commands/remember.md](.claude/commands/remember.md),
-  [.claude/commands/recall.md](.claude/commands/recall.md),
-  [.claude/commands/compact-tags.md](.claude/commands/compact-tags.md), and
-  [.claude/commands/morning-brief.md](.claude/commands/morning-brief.md) - Claude
-  Code slash commands
-
-Agents should retrieve through the CLI instead of searching `memory/` directly,
-and should write entries through `memory add` instead of hand-editing files.
-
-## Development
+Full setup, the plugin install that makes this work from *other* repos, and
+connector pulls from Gmail and Slack: **[docs/install.md](docs/install.md)**.
+
+## What else is different
+
+**It tells you what's still true.** Entries link into chains — a note becomes a
+pending decision becomes a decision — and recall annotates stale members instead
+of ranking them like everything else. Open items report whether they were
+resolved and by what.
+
+<p align="center">
+  <img src="docs/assets/ui-chain.png" alt="Entry detail showing a timeline from pending-decision to decision" width="900">
+</p>
+
+**The agent is the interface.** No SDK, no client library, no integration code.
+Repo-level instructions and skills teach the agent when to capture and when to
+recall, and guardrail hooks make the correct path the only path — agents can't
+grep the store or hand-write entries, which is what makes recall trustworthy
+rather than best-effort.
+
+**Retrieval is hybrid, not just vectors.** Local embeddings, persistent BM25,
+reciprocal rank fusion, metadata prefilters, query expansion, and an optional
+local cross-encoder rerank.
+
+**There's a UI for reading.** Browse, search, filter by person, team, tag, type
+and date, inspect the graph, and edit connector and source config.
+
+<p align="center">
+  <img src="docs/assets/ui-record.png" alt="The record screen with filters, type histogram and per-person counts" width="900">
+</p>
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/install.md](docs/install.md) | Setup, `memui`, plugin install for other repos, connectors |
+| [docs/cli.md](docs/cli.md) | Every command, with the flags that matter |
+| [docs/concepts.md](docs/concepts.md) | Storage layout, entry schema, graphs, timeline chains, retrieval |
+| [docs/reference-sources.md](docs/reference-sources.md) | Optional directory lookups for slug ground truth |
+| [docs/upgrading.md](docs/upgrading.md) | Migration, backup and restore, index slots |
+| [AGENTS.md](AGENTS.md) | The agent contract — capture, recall, citations |
+| [MEMORY-GUARDRAILS.md](MEMORY-GUARDRAILS.md) | Write-safety rules for `memory/` |
+
+Agent skills live in [`skills/`](skills): capture, recall, single-graph recall,
+promotion, graph management, tag compaction, connector pulls, and a morning
+brief.
+
+## Contributing
+
+Bug reports, docs fixes, UI polish, retrieval improvements and connector
+templates are all welcome. The one rule that shapes everything else: **keep it
+local-first** — nothing hosted may become required for normal use.
 
 ```bash
 npm install
-npm run memory -- help
 npm run typecheck
-npm run index
+npm test
 ```
 
-Project layout:
-
-```text
-src/                      TypeScript CLI, indexing, schema, server, and UI APIs
-src/ui/                   Local browser UI
-skills/                   Agent skills for capture, recall, and pull workflows
-connectors/               Public connector templates
-sources/                  Public reference-source templates (all ship disabled)
-memory/                   The DEFAULT memory graph + connector/rules config (gitignored, own nested repo)
-memory-graphs/            Named SHARED graphs, one dir per graph (gitignored, each its own nested repo)
-.index/                   Rebuildable local index (gitignored)
-.claude/                  Claude Code commands, hooks, and settings
-docs/assets/              Public README assets
-```
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) — it covers the architecture, the
+privacy review every PR goes through, and a few good first issues.
 
 ## Community
 
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Security reports: [SECURITY.md](SECURITY.md)
 - Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - License: [Apache License 2.0](LICENSE)
