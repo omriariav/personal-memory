@@ -2594,3 +2594,9 @@ dialog.modal.backfill-modal {
   background: var(--danger, #e5534b);
   color: var(--bg, #fff);
 }
+
+/* Suggestions a reference source ruled out: present but visually secondary —
+   they are evidence of a decision already taken, not a queue to work through. */
+.mdismissed { opacity: 0.72; }
+.mdismissed .mrow { border-left: 2px solid var(--border); }
+.msnippet.mwhy { font-style: italic; }

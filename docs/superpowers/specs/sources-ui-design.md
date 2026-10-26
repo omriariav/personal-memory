@@ -126,18 +126,40 @@ Dismissals only appear after a reconcile-writing run, so a fresh store shows
 nothing here until maintenance has run once. Do not paper over that with an
 automatic run on page load — the run executes a shell command.
 
-### 5. Guard hooks: teach the search guard about `sources`
+### 5. Guard hooks — DROPPED, the premise was false
 
-The write guard already permits `memory/sources/` (it denies only `entries/`,
-`.index/`, and `memory/eval/`), and the merged guardrails table documents it as
-hand-editable. But the search guard's allowlist has `connectors` and not
-`sources`, so an agent can write a private override and then be denied reading
-it back from the shell.
+This item proposed adding `sources` to the search guard's allowlist, on the
+belief that a private override was writable but not shell-readable, unlike
+connectors. **Probing the actual hook disproved it**, so the change is not made:
 
-Add `sources` to that allowlist. **Both copies** — `.claude/hooks/` and
-`.codex/hooks/`: `MEMORY-GUARDRAILS.md` records that the two sets are separate
-copies that have drifted before, and that only the `.claude` pair is under test.
-Add a `scripts/memory-guards.test.sh` case so this one is covered.
+```
+DENY   cat memory/connectors/gmail.md
+DENY   cat memory/sources/people-directory.md     ← same, not asymmetric
+ALLOW  grep -rn lookup sources/                   ← already allowed
+```
+
+Naming any store path in a shell read is denied regardless of subdirectory, and
+a scoped search of the tracked `sources/` template dir is already allowed
+without an allowlist entry. There is no gap to close.
+
+Worse, making the change would have *weakened* the guard. The allowlist is
+consulted only in the whole-tree-sweep branch, and it matches loosely:
+
+```
+DENY   grep -rli "jane doe" .
+ALLOW  grep -rli "connectors" .    ← existing entry already defeats the sweep guard
+DENY   grep -rli "sources" .       ← would become ALLOW
+```
+
+`sources` is a plausible sweep term — memory frontmatter carries `sources:` and
+`source_ids:` — so allowlisting it would let a whole-tree sweep walk the store.
+
+**Separate pre-existing finding, out of scope here:** the sweep branch matches
+its allowlist against text that includes non-path tokens, so *any* allowlisted
+word anywhere in a command defeats it (`grep -rli "connectors" .` above). That
+is a real hole in a safety-critical hook, in both the `.claude` and `.codex`
+copies. It deserves its own change with its own tests, not a drive-by fix
+inside a UI feature.
 
 ### 6. Tests
 

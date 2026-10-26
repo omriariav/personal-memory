@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   lookupDirectory,
   parseSource,
   reconcileSuggestions,
+  writeSource,
   slugQuery,
   type DirectoryMatch,
   type LookupRunner,
@@ -387,4 +388,39 @@ test("lookups are cached per slug across suggestions", async () => {
     counting,
   );
   assert.equal(calls, 3); // jane-doe looked up once, not twice
+});
+
+// ---------------- writing (UI/private-override layer) ----------------
+
+test("writeSource writes the private override and loadSources resolves it", async () => {
+  const { templates, overrides } = makeLayers();
+  const path = await writeSource("people-directory", VALID, overrides);
+
+  assert.equal(path, join(overrides, "people-directory.md"));
+  assert.equal(readFileSync(path, "utf8"), VALID);
+
+  const [file] = await loadSources(templates, overrides);
+  assert.equal(file?.origin, "override");
+  assert.equal(file?.fm?.lookup.command, "dir-lookup {query}");
+});
+
+test("writeSource rejects invalid content and writes nothing", async () => {
+  const { overrides } = makeLayers();
+  const bad = VALID.replace("kind: person", "kind: org");
+
+  await assert.rejects(() => writeSource("people-directory", bad, overrides), /invalid source frontmatter/);
+  assert.equal(existsSync(join(overrides, "people-directory.md")), false);
+  assert.deepEqual(readdirSync(overrides), []);
+});
+
+test("writeSource builds the path from the name alone — a traversing name never writes", async () => {
+  const { overrides } = makeLayers();
+  await assert.rejects(() => writeSource("../escaped", VALID, overrides));
+  assert.deepEqual(readdirSync(overrides), []);
+});
+
+test("writeSource leaves no .tmp file behind", async () => {
+  const { overrides } = makeLayers();
+  await writeSource("people-directory", VALID, overrides);
+  assert.deepEqual(readdirSync(overrides), ["people-directory.md"]);
 });

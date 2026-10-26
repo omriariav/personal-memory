@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, mkdir, writeFile, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { exec } from "node:child_process";
@@ -99,6 +99,27 @@ export async function loadSources(
       }
     }),
   );
+}
+
+/**
+ * Validate + atomically write a source file (tmp + rename in the same dir).
+ * Always writes to the PRIVATE override layer (`memory/sources/`) so edits —
+ * the real lookup command, which must never be committed — can't land in the
+ * git-tracked templates. The path is built from `name` only: no caller-supplied
+ * path ever reaches the filesystem. Returns the path written.
+ */
+export async function writeSource(
+  name: string,
+  raw: string,
+  overridesDir = PRIVATE_SOURCES_DIR,
+): Promise<string> {
+  parseSource(raw, name); // throws on invalid content — nothing is written
+  await mkdir(overridesDir, { recursive: true });
+  const path = join(overridesDir, `${name}.md`);
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, raw, "utf8");
+  await rename(tmp, path);
+  return path;
 }
 
 export const relSource = (p: string) => relative(ROOT, p);

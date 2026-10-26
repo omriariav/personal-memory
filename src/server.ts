@@ -8,6 +8,7 @@ import { ROOT } from "./ingest.js";
 import { search, indexStatus, type SearchFilters } from "./store.js";
 import { MissingIndexError, openCatalog, type Catalog } from "./catalog.js";
 import { loadConnectors, loadConnectorState, writeConnector, relConnector } from "./connectors.js";
+import { loadSources, writeSource, relSource } from "./sources.js";
 import {
   DEFAULT_GRAPH,
   createGraph,
@@ -192,7 +193,8 @@ async function readBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<st
 
 // Names are validated against this shape and the path is built from the name
 // alone — no request-supplied path ever reaches the filesystem.
-const CONNECTOR_NAME = /^[a-z0-9][a-z0-9-]*$/;
+/** Lower-kebab stem of a connector or source file; also the on-disk filename. */
+const FILE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 async function apiPutConnector(
   req: IncomingMessage,
@@ -219,6 +221,52 @@ async function apiPutConnector(
     return;
   }
   sendJson(res, 200, { ok: true, name });
+}
+
+/**
+ * Reference sources — the same two-layer template/override files as
+ * connectors, listed with their lookup contract. No lookup is ever executed
+ * here: running one means running a shell command on an HTTP request, which
+ * this server has no Origin check to defend (see the design doc).
+ */
+async function apiSources(res: ServerResponse): Promise<void> {
+  const files = await loadSources();
+  const sources = files.map((s) => ({
+    name: s.name,
+    kind: s.fm?.kind,
+    origin: s.origin,
+    path: relSource(s.path),
+    enabled: s.fm?.enabled ?? false,
+    lookup: s.fm?.lookup,
+    body: s.body,
+    raw: s.raw,
+    ...(s.error ? { error: s.error } : {}),
+  }));
+  sendJson(res, 200, { sources });
+}
+
+async function apiPutSource(req: IncomingMessage, res: ServerResponse, name: string): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readBody(req);
+  } catch (err) {
+    sendJson(res, (err as { status?: number }).status ?? 500, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+  if (!raw.trim()) {
+    sendJson(res, 400, { error: "empty body — send the full source file text" });
+    return;
+  }
+  let path: string;
+  try {
+    path = await writeSource(name, raw);
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  sendJson(res, 200, { ok: true, name, path: relSource(path) });
 }
 
 const GRAPH_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -596,9 +644,16 @@ export function startServer(opts: { port: number; open: boolean }): Promise<neve
       } else if (url.pathname === "/api/maintenance/link") {
         if (req.method === "POST") await apiChainLink(req, res);
         else sendJson(res, 405, { error: "method not allowed" });
+      } else if (url.pathname === "/api/sources") {
+        await apiSources(res);
+      } else if (url.pathname.startsWith("/api/sources/")) {
+        const name = url.pathname.slice("/api/sources/".length);
+        if (!FILE_NAME.test(name)) sendJson(res, 404, { error: "not found" });
+        else if (req.method === "PUT") await apiPutSource(req, res, name);
+        else sendJson(res, 405, { error: "method not allowed" });
       } else if (url.pathname.startsWith("/api/connectors/")) {
         const name = url.pathname.slice("/api/connectors/".length);
-        if (!CONNECTOR_NAME.test(name)) sendJson(res, 404, { error: "not found" });
+        if (!FILE_NAME.test(name)) sendJson(res, 404, { error: "not found" });
         else if (req.method === "PUT") await apiPutConnector(req, res, name);
         else sendJson(res, 405, { error: "method not allowed" });
       } else {
