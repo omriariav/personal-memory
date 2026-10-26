@@ -1462,6 +1462,43 @@ async function cmdConnectors(argv: string[]) {
   if (invalid) process.exitCode = 1;
 }
 
+async function cmdSources(argv: string[]) {
+  if (argv.length > 0) throw new Error("usage: memory sources");
+  const { loadSources, relSource } = await import("./sources.js");
+  const sources = await loadSources();
+  if (sources.length === 0) {
+    console.log("(no source files under sources/ or memory/sources/)");
+    return;
+  }
+  let invalid = 0;
+  for (const s of sources) {
+    if (s.error) {
+      invalid++;
+      console.log(`✗ ${s.name}  (${relSource(s.path)})`);
+      for (const line of s.error.split("\n")) console.log(`    ${line}`);
+      continue;
+    }
+    const fm = s.fm!;
+    const preview = (s.body ?? "").split("\n").find((l) => l.trim() && !l.startsWith("#")) ?? "";
+    console.log(
+      `${fm.enabled ? "●" : "○"} ${s.name.padEnd(12)} ${fm.kind}  ${fm.lookup.command}` +
+        (s.origin === "override" ? "  [private override]" : ""),
+    );
+    if (fm.lookup.refresh) {
+      console.log(
+        `    refresh: ${fm.lookup.refresh}` +
+          (fm.lookup.cache_ttl_days ? ` (cache ttl ${fm.lookup.cache_ttl_days}d)` : ""),
+      );
+    }
+    if (preview) console.log(`    ${preview.trim().slice(0, 100)}`);
+  }
+  console.log(
+    `\n${sources.length - invalid}/${sources.length} valid` +
+      (invalid ? " — fix the files above (schema is strict)" : ""),
+  );
+  if (invalid) process.exitCode = 1;
+}
+
 async function cmdUi(argv: string[]) {
   const { values } = parseArgs({
     args: argv,
@@ -1562,6 +1599,8 @@ Usage:
             # record that a connector sweep completed; captures are recorded by memory add
   memory connectors mark-captured <name> [--at ISO_TIMESTAMP]
             # backfill/record connector prompt usage without changing memories
+  memory sources                     # list + validate sources/<name>.md (reference directories consulted by
+                                     # maintenance slug hygiene and by agents before minting new slugs)
   memory ui [--port N] [--no-open]   # local web UI (default port 4664; memory writes limited to connector config
                                      # and slug merges — all via the same validated CLI code paths)
 `;
@@ -1590,6 +1629,7 @@ async function main() {
     case "promote": return cmdPromote(rest);
     case "eval": return (await import("./eval-cli.js")).cmdEval(rest);
     case "people": return (await import("./people-cli.js")).cmdPeople(rest);
+    case "sources": return cmdSources(rest);
     case "ui": return cmdUi(rest);
     case undefined:
     case "help":
