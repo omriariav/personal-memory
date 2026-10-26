@@ -8,7 +8,7 @@ import { ROOT } from "./ingest.js";
 import { search, indexStatus, type SearchFilters } from "./store.js";
 import { MissingIndexError, openCatalog, type Catalog } from "./catalog.js";
 import { loadConnectors, loadConnectorState, writeConnector, relConnector } from "./connectors.js";
-import { loadSources, writeSource, relSource } from "./sources.js";
+import { loadSources, writeSource, setSourceEnabled, relSource } from "./sources.js";
 import {
   DEFAULT_GRAPH,
   createGraph,
@@ -267,6 +267,35 @@ async function apiPutSource(req: IncomingMessage, res: ServerResponse, name: str
     return;
   }
   sendJson(res, 200, { ok: true, name, path: relSource(path) });
+}
+
+/**
+ * Enable/disable toggle. The flip happens in `setSourceEnabled` rather than by
+ * rewriting text in the browser, so the file keeps its command and guidance and
+ * goes through the one validation path. Writes a file; runs no lookup.
+ */
+async function apiSetSourceEnabled(req: IncomingMessage, res: ServerResponse, name: string): Promise<void> {
+  let body: unknown;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  const enabled = (body as { enabled?: unknown } | null)?.enabled;
+  if (typeof enabled !== "boolean") {
+    sendJson(res, 400, { error: "body must be {\"enabled\": true|false}" });
+    return;
+  }
+  try {
+    const path = await setSourceEnabled(name, enabled);
+    // Return the file as written: the detail screen's editor holds the text
+    // from before the toggle, and saving that back would undo it.
+    const raw = (await loadSources()).find((s) => s.name === name)?.raw;
+    sendJson(res, 200, { ok: true, name, enabled, path: relSource(path), raw });
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 const GRAPH_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -647,9 +676,12 @@ export function startServer(opts: { port: number; open: boolean }): Promise<neve
       } else if (url.pathname === "/api/sources") {
         await apiSources(res);
       } else if (url.pathname.startsWith("/api/sources/")) {
-        const name = url.pathname.slice("/api/sources/".length);
+        const rest = url.pathname.slice("/api/sources/".length);
+        const toggling = rest.endsWith("/enabled");
+        const name = toggling ? rest.slice(0, -"/enabled".length) : rest;
         if (!FILE_NAME.test(name)) sendJson(res, 404, { error: "not found" });
-        else if (req.method === "PUT") await apiPutSource(req, res, name);
+        else if (toggling && req.method === "POST") await apiSetSourceEnabled(req, res, name);
+        else if (!toggling && req.method === "PUT") await apiPutSource(req, res, name);
         else sendJson(res, 405, { error: "method not allowed" });
       } else if (url.pathname.startsWith("/api/connectors/")) {
         const name = url.pathname.slice("/api/connectors/".length);

@@ -1742,6 +1742,70 @@ function renderSources() {
   });
 }
 
+/**
+ * The enabled switch. A disabled source is consulted by nothing, so this is the
+ * control that decides whether the lookup command ever runs — it says so, and
+ * it refuses to act on a file that doesn't parse (the flag lives in the
+ * frontmatter the server would have to rewrite).
+ * @param {HTMLElement} host @param {Source} s
+ */
+function mountSourceToggle(host, s) {
+  let enabled = s.enabled;
+  let busy = false;
+  let err = "";
+  const paint = () => {
+    host.innerHTML = `
+      <button class="chip ${enabled ? "chip-primary" : ""}" id="stoggle"
+              role="switch" aria-checked="${enabled}" ${busy || s.error ? "disabled" : ""}>
+        ${busy ? "saving…" : enabled ? "enabled" : "disabled"}
+      </button>
+      <span class="save-note">${
+        s.error
+          ? `<span class="cerr">fix the file below before enabling</span>`
+          : err
+            ? `<span class="cerr">${esc(err)}</span>`
+            : enabled
+              ? `consulted during <code>maintenance</code>; its command will run`
+              : `consulted by nothing — the command never runs`
+      }</span>`;
+    const btn = $("#stoggle");
+    if (btn) btn.addEventListener("click", flip);
+  };
+  const flip = async () => {
+    busy = true;
+    err = "";
+    paint();
+    try {
+      const res = await fetch(`/api/sources/${encodeURIComponent(s.name)}/enabled`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `save failed (${res.status})`);
+      enabled = data.enabled;
+      state.sources = null; // the file on disk is now authoritative
+      const el = $("#sorigin");
+      if (el) el.innerHTML = originBadge({ ...s, origin: "override" });
+      const p = $("#spath");
+      if (p) p.innerHTML = `<code>${esc(data.path)}</code>`;
+      // Re-seed the editor from what was written. Without this it still holds
+      // the pre-toggle text, and saving there would quietly flip the flag back.
+      if (data.raw) {
+        s.raw = data.raw;
+        const editorHost = $("#seditor-host");
+        if (editorHost) mountSourceEditor(editorHost, s);
+      }
+    } catch (e) {
+      err = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+      paint();
+    }
+  };
+  paint();
+}
+
 /** @param {string} name */
 function renderSource(name) {
   const main = $("#main");
@@ -1765,12 +1829,22 @@ function renderSource(name) {
         <span id="sorigin">${originBadge(s)}</span>
         <span id="spath"><code>${esc(sourcePath(s))}</code></span>
         ${s.kind ? `<span>resolves ${esc(s.kind)} slugs</span>` : ""}
-        <span id="sstate">${s.enabled ? "enabled" : "disabled — consulted by nothing"}</span>
       </div>
+      <div class="source-toggle" id="stoggle-host"></div>
       <div class="connector-editor" id="seditor-host"></div>
     </div>
   `;
-  mountFileEditor($("#seditor-host"), {
+  mountSourceToggle($("#stoggle-host"), s);
+  mountSourceEditor($("#seditor-host"), s);
+}
+
+/**
+ * The raw-file editor for one source. Remountable, because toggling `enabled`
+ * rewrites the file underneath it.
+ * @param {HTMLElement} host @param {Source} s
+ */
+function mountSourceEditor(host, s) {
+  mountFileEditor(host, {
     raw: s.raw,
     error: s.error,
     ariaLabel: "source file",
@@ -1782,13 +1856,16 @@ function renderSource(name) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `save failed (${res.status})`);
+      s.raw = raw;
       state.sources = null; // refetch on next view — the file on disk is now authoritative
       const saved = { ...s, origin: /** @type {const} */ ("override"), path: data.path };
       $("#sorigin").innerHTML = originBadge(saved);
       $("#spath").innerHTML = `<code>${esc(data.path)}</code>`;
-      $("#sstate").textContent = /^\s*enabled:\s*true\s*$/m.test(raw)
-        ? "enabled"
-        : "disabled — consulted by nothing";
+      // The frontmatter may have flipped the flag by hand — keep the switch honest.
+      const toggleHost = $("#stoggle-host");
+      if (toggleHost) {
+        mountSourceToggle(toggleHost, { ...s, enabled: /^enabled:\s*true\s*$/m.test(raw), error: undefined });
+      }
     },
   });
 }

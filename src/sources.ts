@@ -122,6 +122,39 @@ export async function writeSource(
   return path;
 }
 
+/**
+ * Flip a source's `enabled` flag, preserving the file otherwise byte for byte
+ * — the lookup command, the comments explaining it, and the agent guidance all
+ * survive a toggle. Only the frontmatter block is rewritten, so a body line
+ * that happens to read `enabled: true` is left alone; a file that omits the
+ * flag gets one appended to its frontmatter. Writes through `writeSource`, so
+ * the result is validated and lands in the private override layer like any
+ * other edit. Returns the path written.
+ */
+export async function setSourceEnabled(
+  name: string,
+  enabled: boolean,
+  templatesDir = SOURCES_DIR,
+  overridesDir = PRIVATE_SOURCES_DIR,
+): Promise<string> {
+  const file = (await loadSources(templatesDir, overridesDir)).find((s) => s.name === name);
+  if (!file) throw new Error(`no source named '${name}'`);
+  if (file.error) throw new Error(file.error); // never rewrite a file we can't parse
+  return writeSource(name, setFrontmatterFlag(file.raw, "enabled", enabled), overridesDir);
+}
+
+/** Rewrite `key: <bool>` inside the leading `---` block only, appending it when absent. */
+function setFrontmatterFlag(raw: string, key: string, value: boolean): string {
+  const fence = raw.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)/);
+  if (!fence) throw new Error("source file has no frontmatter block");
+  const [, open, inner, close] = fence;
+  const line = new RegExp(`^${key}:.*$`, "m");
+  const body = line.test(inner!)
+    ? inner!.replace(line, `${key}: ${value}`)
+    : `${inner}\n${key}: ${value}`;
+  return `${open}${body}${close}${raw.slice(fence[0].length)}`;
+}
+
 export const relSource = (p: string) => relative(ROOT, p);
 
 // ---------------- lookups ----------------

@@ -2600,3 +2600,8 @@ dialog.modal.backfill-modal {
 .mdismissed { opacity: 0.72; }
 .mdismissed .mrow { border-left: 2px solid var(--border); }
 .msnippet.mwhy { font-style: italic; }
+
+/* Reference-source enabled switch — the control that decides whether a
+   lookup command ever runs, so its state reads at a glance. */
+.source-toggle { display: flex; align-items: center; gap: 10px; margin: 10px 0 18px; }
+.source-toggle .save-note { font-size: 12px; color: var(--muted); }

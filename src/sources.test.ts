@@ -9,6 +9,7 @@ import {
   lookupDirectory,
   parseSource,
   reconcileSuggestions,
+  setSourceEnabled,
   writeSource,
   slugQuery,
   type DirectoryMatch,
@@ -423,4 +424,65 @@ test("writeSource leaves no .tmp file behind", async () => {
   const { overrides } = makeLayers();
   await writeSource("people-directory", VALID, overrides);
   assert.deepEqual(readdirSync(overrides), ["people-directory.md"]);
+});
+
+// ---------------- enable / disable (UI toggle) ----------------
+
+test("setSourceEnabled flips the frontmatter flag and changes nothing else", async () => {
+  const { templates, overrides } = makeLayers();
+  writeFileSync(join(overrides, "people-directory.md"), VALID, "utf8");
+
+  await setSourceEnabled("people-directory", false, templates, overrides);
+  const off = readFileSync(join(overrides, "people-directory.md"), "utf8");
+  assert.equal(off, VALID.replace("enabled: true", "enabled: false"));
+
+  await setSourceEnabled("people-directory", true, templates, overrides);
+  assert.equal(readFileSync(join(overrides, "people-directory.md"), "utf8"), VALID);
+});
+
+test("setSourceEnabled on a template writes an override, leaving the template untouched", async () => {
+  const { templates, overrides } = makeLayers();
+  const template = VALID.replace("enabled: true", "enabled: false");
+  writeFileSync(join(templates, "people-directory.md"), template, "utf8");
+
+  const path = await setSourceEnabled("people-directory", true, templates, overrides);
+
+  assert.equal(path, join(overrides, "people-directory.md"));
+  assert.equal(readFileSync(join(templates, "people-directory.md"), "utf8"), template);
+  const [file] = await loadSources(templates, overrides);
+  assert.equal(file?.origin, "override");
+  assert.equal(file?.fm?.enabled, true);
+});
+
+test("setSourceEnabled only rewrites frontmatter, never a body line that looks like it", async () => {
+  const { templates, overrides } = makeLayers();
+  const withDecoy = `${VALID}\nSet \`enabled: true\` once the command works.\n`;
+  writeFileSync(join(overrides, "people-directory.md"), withDecoy, "utf8");
+
+  await setSourceEnabled("people-directory", false, templates, overrides);
+
+  const out = readFileSync(join(overrides, "people-directory.md"), "utf8");
+  assert.match(out, /^enabled: false$/m);
+  assert.ok(out.includes("Set `enabled: true` once the command works."));
+});
+
+test("setSourceEnabled inserts the flag when the file omits it", async () => {
+  const { templates, overrides } = makeLayers();
+  writeFileSync(join(overrides, "people-directory.md"), VALID.replace("enabled: true\n", ""), "utf8");
+
+  await setSourceEnabled("people-directory", false, templates, overrides);
+
+  const [file] = await loadSources(templates, overrides);
+  assert.equal(file?.fm?.enabled, false);
+});
+
+test("setSourceEnabled refuses an unknown name and an unparseable file", async () => {
+  const { templates, overrides } = makeLayers();
+  await assert.rejects(() => setSourceEnabled("nope", true, templates, overrides), /no source named/);
+
+  writeFileSync(join(overrides, "people-directory.md"), VALID.replace("kind: person", "kind: org"), "utf8");
+  await assert.rejects(
+    () => setSourceEnabled("people-directory", true, templates, overrides),
+    /invalid source frontmatter/,
+  );
 });

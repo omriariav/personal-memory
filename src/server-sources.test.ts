@@ -181,3 +181,61 @@ test("PUT /api/sources/<name> rejects an empty body and a non-slug name", { time
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+const setEnabled = (base: string, name: string, enabled: boolean) =>
+  fetch(`${base}/api/sources/${name}/enabled`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+
+test("POST /api/sources/<name>/enabled toggles the flag without touching the rest", { timeout: 300_000 }, async () => {
+  const root = scratchStore();
+  try {
+    await withServer(root, async (base) => {
+      // enabling a template-backed source creates the override
+      const on = await setEnabled(base, "people-directory", true);
+      assert.equal(on.status, 200);
+      // the response carries the NEW file text: the detail screen's editor must
+      // re-render from it, or a later save there would write the stale flag back
+      const onBody = (await on.json()) as { enabled: boolean; raw: string };
+      assert.equal(onBody.enabled, true);
+      assert.match(onBody.raw, /^enabled: true$/m);
+      assert.ok(onBody.raw.includes("your-directory-lookup {query}"));
+      const s = (await getSources(base)).find((x) => x.name === "people-directory");
+      assert.equal(s?.enabled, true);
+      assert.equal(s?.origin, "override");
+      // the command and the guidance body survive the toggle
+      assert.equal(s?.lookup?.command, "your-directory-lookup {query}");
+      assert.ok(s?.raw.includes("# Resolving people"));
+      // the tracked template is untouched
+      assert.equal(readFileSync(join(root, "sources", "people-directory.md"), "utf8"), TEMPLATE);
+
+      const off = await setEnabled(base, "people-directory", false);
+      assert.equal(off.status, 200);
+      assert.equal((await getSources(base)).find((x) => x.name === "people-directory")?.enabled, false);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/sources/<name>/enabled rejects a bad name, body, and unknown source", { timeout: 300_000 }, async () => {
+  const root = scratchStore();
+  try {
+    await withServer(root, async (base) => {
+      assert.equal((await setEnabled(base, "Not-A-Slug", true)).status, 404);
+      assert.equal((await setEnabled(base, "no-such-source", true)).status, 400);
+      const bad = await fetch(`${base}/api/sources/people-directory/enabled`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: "yes please" }),
+      });
+      assert.equal(bad.status, 400);
+      // nothing was written by any of the rejected calls
+      assert.equal(existsSync(join(root, "memory", "sources")), false);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

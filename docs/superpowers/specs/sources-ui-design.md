@@ -100,7 +100,18 @@ List screen reusing the connector row pattern: status dot (error / enabled /
 disabled), the `kind` badge, the origin badge, the command in `<code>`, and a
 "+ new source" modal writing a private override.
 
-Detail screen mounting the existing `mountFileEditor` against the raw file.
+Detail screen mounting the existing `mountFileEditor` against the raw file,
+led by an **enabled/disabled switch** (added after the first build, on
+request). The flip happens server-side in `setSourceEnabled` + `POST
+/api/sources/<name>/enabled`, not by rewriting text in the browser: one
+validation path, and the command, its comments and the guidance body survive
+a toggle untouched. The switch is unavailable on a file that fails validation,
+since the flag lives in frontmatter the server would have to rewrite.
+
+The toggle endpoint returns the file **as written**, and the detail screen
+re-seeds its editor from that. Without it the editor keeps pre-toggle text and
+a later save there silently flips the flag back — a bug found by toggling in
+the running app, not by the tests.
 
 **Decision (mine): the "+ new source" modal seeds `enabled: false`**, matching
 the shipped template. `SourceSchema` defaults `enabled` to `true`, so without
