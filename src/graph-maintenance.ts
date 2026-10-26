@@ -407,10 +407,20 @@ export async function applyChainLink(opts: {
     return { laterId: entry.id, follows: entry.follows ?? [], changed: false };
   }
 
-  const { body, path: _p, graphs, paths: _paths, ...rest } = entry;
+  return writeFollows(entry, mergedFollows, `Link memory: ${entry.id} follows ${mergedFollows.join(", ")}`, opts.refreshAudit);
+}
+
+/** Rewrite an entry's `follows` in every graph it lives in, sync, and commit each member store. */
+async function writeFollows(
+  entry: Awaited<ReturnType<typeof requireEntry>>,
+  follows: string[],
+  message: string,
+  refreshAudit?: boolean,
+): Promise<ChainLinkResult> {
+  const { body, path: _p, graphs, paths: _paths, follows: _f, ...rest } = entry;
   const fm = FrontmatterSchema.parse({
     ...rest,
-    follows: mergedFollows,
+    ...(follows.length ? { follows } : {}),
     updated: new Date().toISOString().slice(0, 10),
   }) as Frontmatter;
   const written = await writeEntryAll(fm, body, graphs);
@@ -420,22 +430,29 @@ export async function applyChainLink(opts: {
   // store explicitly (the file changed in all of them).
   let afterCommit = false;
   for (const g of graphs) {
-    afterCommit =
-      (await commitMemoryRepo(
-        `Link memory: ${entry.id} follows ${mergedFollows.join(", ")}`,
-        storeFor(g).dir,
-      )) || afterCommit;
+    afterCommit = (await commitMemoryRepo(message, storeFor(g).dir)) || afterCommit;
   }
-  const audit = opts.refreshAudit === false ? undefined : await refreshGraphMaintenanceAudit();
-  return {
-    laterId: entry.id,
-    follows: mergedFollows,
-    changed: true,
-    path: rel(path),
-    index,
-    afterCommit,
-    ...(audit ? { audit } : {}),
-  };
+  const audit = refreshAudit === false ? undefined : await refreshGraphMaintenanceAudit();
+  return { laterId: entry.id, follows, changed: true, path: rel(path), index, afterCommit, ...(audit ? { audit } : {}) };
+}
+
+/**
+ * Remove `follows` links from an existing entry — the undo for a link that
+ * was wrong (e.g. an outcome chained to an item it doesn't settle). The
+ * earlier entry regains `[open]` if nothing else follows it.
+ */
+export async function removeChainLink(opts: {
+  laterId: string;
+  follows: string[];
+  refreshAudit?: boolean;
+}): Promise<ChainLinkResult> {
+  const catalog = await openCatalogForWrite();
+  const entry = await requireEntry(catalog, opts.laterId);
+  const current = entry.follows ?? [];
+  const missing = opts.follows.filter((id) => !current.includes(id));
+  if (missing.length) throw new Error(`${entry.id} does not follow ${missing.join(", ")}`);
+  const kept = current.filter((id) => !opts.follows.includes(id));
+  return writeFollows(entry, kept, `Unlink memory: ${entry.id} no longer follows ${opts.follows.join(", ")}`, opts.refreshAudit);
 }
 
 export async function writeGraphMaintenanceAudit(audit: GraphMaintenanceAudit): Promise<void> {

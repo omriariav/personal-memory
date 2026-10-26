@@ -42,7 +42,8 @@ export interface ChainAnnotation {
   dangling?: string[];
 }
 
-const OPEN_TYPES: ReadonlySet<MemoryType> = new Set(["pending-decision", "todo"]);
+/** Types that stay `[open]` until a follower settles them. */
+export const OPEN_TYPES: ReadonlySet<MemoryType> = new Set(["pending-decision", "todo"]);
 
 /** Types whose follower settles an open item (`pending-decision` / `todo`). */
 const CLOSING_TYPES: ReadonlySet<MemoryType> = new Set(["decision", "todo", "note"]);

@@ -38,6 +38,12 @@ index files, and the entry paths that CLI output cites.
      items to track. When an open matter is later settled, do **not** rewrite
      the old entry — log a **new** `decision` entry with
      `--follows <pending-id>` so the timeline is preserved (see below).
+     **A `todo` must be something only a later memory can close.** Anything
+     another system tracks to completion — a meeting already booked, an
+     invite sent, a ticket filed — is an `event`/`meeting` (dated for when
+     it happens), not a `todo`: nothing will ever log its outcome, so it would
+     sit `[open]` forever. "Book an intro with X" is a `todo`; "intro with X
+     booked for Mon" is an `event` that `--follows` that todo and closes it.
    - `date` — ISO `YYYY-MM-DD`; default to today if not stated.
    - `people` — kebab-case slugs (e.g. `jane-doe`). **Reuse existing slugs** — run
      `memory people show "<name as the user said it>"` (resolves nicknames,
@@ -96,8 +102,38 @@ the latest state instead of a stale one:
   `--follows <earlier-id>` (comma-separate for several). Typical: a `decision`
   that settles a `pending-decision`, a follow-up note with new facts, an
   outcome after an incident.
+- **Settlements that happen outside memory** (a Slack ask answered "done", a
+  task ticked in a tracker, an invite accepted, an approval notification)
+  leave their todo `[open]` forever unless someone logs the outcome. Before
+  capturing an outcome, run
+  `npx tsx src/cli.ts open "<what settled>" --source <prefix>` — it lists only
+  unresolved `todo`/`pending-decision` entries, each with its evidence and a
+  `confidence` of `high` or `candidate`.
+  - **Narrowest prefix first**: the thread (`slack:C1:<thread_ts>`, an
+    `exact` match), widening to the conversation (`slack:D0123`) only when
+    that finds nothing — a DM reply that never threads under the ask still
+    matches at conversation level, but so does every other open ask in that DM.
+  - **Always pass the phrasing** with a conversation-level prefix. `high` means
+    an exact source match, or the single conversation match the phrasing also
+    picks out first; settle only `high` items without asking. A `candidate`
+    needs the user's confirmation (or your own read of the cited file when the
+    user is driving the capture).
+  - **A partial step** (one of two approvals) is a `note` that `--follows` the
+    item *and* a new `todo` for the rest — any follower marks the item
+    resolved, so never link an outcome that doesn't settle it.
+  - **Anchor the outcome on its own message**, not the thread root the todo
+    already uses (`slack:C1:<thread_ts>:<reply_ts>`, or the DM reply's
+    `slack:D0123:<reply_ts>`): reusing the todo's anchor would update the todo
+    in place, which `add` refuses for open items.
+  - Log one outcome entry with `--follows <every open duplicate>` so all
+    copies of the matter close together. If an item is a member of a shared
+    graph (`graphs` in the output), the outcome lands in the default graph
+    only — offer `copy <outcome-id> --to <graph>` so that graph sees the
+    matter resolved too.
 - **After the fact**: `npx tsx src/cli.ts link <later-id> --follows <earlier-id>`
   links two existing entries.
+- **Wrong link**: `npx tsx src/cli.ts unlink <later-id> --follows <earlier-id>`
+  removes it (never edit `follows` by hand) — then log the real outcome.
 - The CLI validates targets (must exist, not be newer, no cycles) and derives
   everything else at read time: an unresolved `pending-decision`/`todo` shows as
   `[open]`, a chained one as `[resolved → <id>]`, and recall annotates stale
