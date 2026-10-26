@@ -476,9 +476,12 @@ folder. The important conventions live in:
   creation, distribution rules, and consistency repair
 - [skills/compact-tags/SKILL.md](skills/compact-tags/SKILL.md) - merging
   similar/duplicate tags with per-merge confirmation
+- [skills/morning-brief/SKILL.md](skills/morning-brief/SKILL.md) - read-only
+  morning brief: calendar, open loops, meeting prep from memory
 - [.claude/commands/remember.md](.claude/commands/remember.md),
-  [.claude/commands/recall.md](.claude/commands/recall.md), and
-  [.claude/commands/compact-tags.md](.claude/commands/compact-tags.md) - Claude
+  [.claude/commands/recall.md](.claude/commands/recall.md),
+  [.claude/commands/compact-tags.md](.claude/commands/compact-tags.md), and
+  [.claude/commands/morning-brief.md](.claude/commands/morning-brief.md) - Claude
   Code slash commands
 
 Agents should retrieve through the CLI instead of searching `memory/` directly,
