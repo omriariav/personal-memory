@@ -1,5 +1,6 @@
 // @ts-check
 import { renderGraphView } from "./graph.js";
+import { renderGraphMap } from "./graphs-map.js";
 import { comboboxHtml, wireCombobox } from "./combobox.js";
 
 /**
@@ -2267,6 +2268,9 @@ function openNewGraphModal() {
   });
 }
 
+/** @type {(() => void) | null} teardown for the relations map's animation loop */
+let stopGraphMap = null;
+
 function renderGraphs() {
   const main = $("#main");
   if (state.graphs === null || state.rules === null) {
@@ -2283,6 +2287,7 @@ function renderGraphs() {
 
   main.innerHTML = `
     <div class="colophon">graphs partition the store into shareable views — capture lands in the <b>default</b> graph, and an entry reaches a named graph by promotion or a distribution rule<span class="sep">·</span>named graphs are self-contained; only the default graph can reference entries that left it</div>
+    <div id="gmap-host"></div>
     <div class="graphs-head">
       <h2>Graphs</h2>
       <button class="chip" id="new-graph">+ new graph</button>
@@ -2295,6 +2300,10 @@ function renderGraphs() {
     <div class="colophon">a rule copies or moves every entry matching a tag or type into a target graph — applied on capture, and on demand to the existing record</div>
     <div id="rules-host"></div>
   `;
+  // the map animates, so its loop is torn down before the screen is rebuilt
+  stopGraphMap?.();
+  stopGraphMap = renderGraphMap($("#gmap-host"), state.entries, orderedGraphs());
+
   $("#new-graph").addEventListener("click", openNewGraphModal);
   $("#rules-run").addEventListener("click", () => openBackfillModal(null));
   $(".glist").addEventListener("click", (ev) => {
