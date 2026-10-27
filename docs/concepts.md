@@ -76,26 +76,31 @@ private store.
 
 ![The Manage Graphs screen listing the default graph and one named shared graph, with distribution rules below](assets/ui-graphs.png)
 
-**A capture lands in the default graph unless you explicitly name another one.**
-Entries reach a shared graph three ways:
+**Every capture lands in the default graph, and nothing leaves it on its
+own.** Three things can *propose* that a memory belongs in a shared graph:
 
-1. **Standing distribution rules** — per tag or per type, configured in the
-   UI's Graphs screen, previewed with `memory rules apply --dry-run`, and
-   applied automatically to future captures.
-2. **A promotion review** — `memory promote candidates --to <graph>` lists
-   unreviewed entries; the agent judges each against the graph's `GRAPH.md`
-   criteria, you confirm one at a time, and `memory copy <id> --to <graph>`
-   executes. Declines are recorded with `memory promote dismiss`.
-3. **An explicit request** — "log this to the platform-team graph", which runs
-   `memory add --graph platform-team`.
+1. **Standing distribution rules** — per tag or per type, configured on the
+   Graphs screen and previewed with `memory rules apply --dry-run`. A rule
+   decides what is worth putting in front of you, not what gets shared.
+2. **A sweep routine** — Claude or Codex reading your recent memories against
+   a graph's `GRAPH.md` criteria and proposing the ones that fit, with its
+   reasoning attached.
+3. **An explicit request** — "log this to the platform-team graph", which
+   captures the memory privately and queues it for that graph.
 
-Route 3 is worth understanding precisely, because it is the one that bypasses
-the default graph: `add --graph <name>` writes the entry into that graph **and
-nowhere else**. It does not leave a copy at home, and `memory list --graph
-default` will not show it. That is why the agent instructions reserve `--graph`
-for an explicit request and route everything else through rules or promotion —
-routes 1 and 2 both *add* a membership to an entry that already lives in the
-default graph, so the home copy always remains.
+All three end in the same place: that graph's **review queue**. Each graph
+has its own, with its own progress, and you work through them one entry at a
+time — on the Manage Graphs screen, or in chat, or with `memory queue`. The
+copy happens when you approve it and not before.
+
+A candidate carries whoever proposed it and why. When the substance belongs
+in the graph but the exact words do not, the proposal can also carry a
+redaction to publish instead; approving that is a separate, explicit choice
+from approving the entry's own wording.
+
+Declining is remembered. A dismissed candidate stays out of that graph's
+queue until the entry itself changes — then it is worth a second look, so it
+comes back.
 
 ### Containment
 

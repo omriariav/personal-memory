@@ -4,14 +4,17 @@ import { z } from "zod";
 import { MEMORY_TYPES, DEFAULT_GRAPH, type MemoryEntry } from "./schema.js";
 import { MEMORY_DIR } from "./ingest.js";
 import { requireGraph } from "./graphs.js";
-import { copyEntry, moveEntry } from "./membership.js";
 import { openCatalog } from "./catalog.js";
 
 /**
  * Standing distribution rules: "entries matching TAG and/or TYPE belong in
- * graph G (copied, or moved)". Configuring a rule IS the user's standing
- * confirmation — rules auto-apply to fresh private captures and backfill via
- * `rules apply` (the UI previews with --dry-run first).
+ * graph G (copied, or moved)".
+ *
+ * A rule PROPOSES; it does not publish. Matching a rule puts an entry in that
+ * graph's review queue, where the user approves it one at a time — a rule is
+ * a standing opinion about what is worth looking at, not standing consent to
+ * share. `mode` says what approving would do, and is carried on the queue row
+ * as the proposed action.
  *
  * The config lives INSIDE the private store so it travels with the private
  * repo, is swept by the auto-commit hook, and never leaks into shared stores.
@@ -134,22 +137,32 @@ export function planRules(
 }
 
 export interface RulesReport {
-  copied: number;
-  moved: number;
+  /** Candidates added to a review queue. */
+  queued: number;
+  /** Plan actions a rule already had a pending row for, or that were otherwise moot. */
+  skipped: number;
   skippedConflicts: number;
+  /** Queued, but not approvable until the named entries join the graph too. */
   blocked: { id: string; graph: string; ids: string[] }[];
   /** Human-readable lines for CLI/capture output. */
   actions: string[];
 }
 
-/** Execute the plan (or preview it with dryRun). `ids` narrows to specific entries. */
-export async function applyRules(
+/**
+ * Turn the plan into review-queue rows (or preview it with dryRun). `ids`
+ * narrows to specific entries — that is what capture passes, so a new memory
+ * is judged against the rules without re-walking the corpus.
+ *
+ * This publishes NOTHING. It used to copy and move directly; every rule match
+ * now lands in the target graph's queue for the user to approve.
+ */
+export async function enqueueRules(
   opts: { dryRun?: boolean; ids?: string[]; rules?: GraphRule[] } = {},
 ): Promise<RulesReport & { plan: RulesPlan }> {
   const rules = opts.rules ?? (await readRules());
   const report: RulesReport & { plan: RulesPlan } = {
-    copied: 0,
-    moved: 0,
+    queued: 0,
+    skipped: 0,
     skippedConflicts: 0,
     blocked: [],
     actions: [],
@@ -161,22 +174,33 @@ export async function applyRules(
   report.plan = planRules(entries, rules);
   report.skippedConflicts = report.plan.conflicts.length;
   if (opts.dryRun) return report;
+  if (report.plan.actions.length === 0) return report;
 
-  for (const a of report.plan.actions) {
-    if (a.action === "copy") {
-      const r = await copyEntry({ id: a.id, to: a.graph });
-      if (r.blockedBy) report.blocked.push({ id: a.id, graph: a.graph, ids: r.blockedBy });
-      else if (r.changed) {
-        report.copied++;
-        report.actions.push(`copied ${a.id} → ${a.graph}`);
-      }
+  const { enqueueMany, queueView } = await import("./graph-queue.js");
+  const results = await enqueueMany(
+    report.plan.actions.map((a) => ({
+      id: a.id,
+      graph: a.graph,
+      action: a.action,
+      reason: `matched a standing distribution rule for '${a.graph}'`,
+      proposedBy: "rules",
+    })),
+  );
+  for (const r of results) {
+    if (r.queued) {
+      report.queued++;
+      report.actions.push(`queued ${r.id} → ${r.graph}`);
     } else {
-      const r = await moveEntry({ id: a.id, to: a.graph });
-      if (r.blockedBy) report.blocked.push({ id: a.id, graph: a.graph, ids: r.blockedBy.ids });
-      else if (r.changed) {
-        report.moved++;
-        report.actions.push(`moved ${a.id} → ${a.graph}`);
-      }
+      report.skipped++;
+    }
+  }
+
+  // Surface containment blockers at propose time so the user sees them on the
+  // row rather than discovering them at the moment they click approve.
+  const view = await queueView();
+  for (const row of view.rows) {
+    if (row.proposedBy === "rules" && row.blockedBy.length > 0) {
+      report.blocked.push({ id: row.id, graph: row.graph, ids: row.blockedBy });
     }
   }
   return report;

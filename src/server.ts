@@ -18,7 +18,7 @@ import {
   storeFor,
   writeGraphManifest,
 } from "./graphs.js";
-import { applyRules, readRules, writeRules, type GraphRule } from "./graph-rules.js";
+import { enqueueRules, readRules, writeRules, type GraphRule } from "./graph-rules.js";
 import { getMaintenanceSnapshot, launchMaintenanceRun, startMaintenanceScheduler } from "./scheduled-maintenance.js";
 import { applyChainLink, dismissSlugSuggestion, mergeSlugs, type SlugKind } from "./graph-maintenance.js";
 import { buildChainIndex } from "./chains.js";
@@ -475,7 +475,7 @@ async function apiApplyRules(req: IncomingMessage, res: ServerResponse): Promise
   const rules = parseRulesBody(data);
   try {
     if (rules && !dryRun) await writeRules(rules); // persist alongside a confirmed apply
-    const report = await applyRules({ dryRun, ...(rules ? { rules } : {}) });
+    const report = await enqueueRules({ dryRun, ...(rules ? { rules } : {}) });
     sendJson(res, 200, { dryRun, ...report });
   } catch (err) {
     sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });

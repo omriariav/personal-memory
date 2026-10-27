@@ -83,9 +83,9 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   its own words; once the home's body changes it is reported stale by
   `graphs sync` and re-proposed for review. Ids are
   unique per logical entry across ALL stores. **Capture always lands in the
-  default graph**; entries enter shared graphs via standing rules
-  (auto-applied at capture + `rules apply` backfills), the user-confirmed
-  promotion review, or an explicit user request. Hard rule (containment): a
+  default graph**; entries enter a shared graph only by the user approving a
+  **review-queue** candidate. Standing rules, an explicit `--graph`, and sweep
+  routines all propose into that queue; none of them publish. Hard rule (containment): a
   shared graph is self-contained — its members never reference non-members
   via `follows` or `sources` (enforced at `add`/`link`/`copy`/`move`/`rules
   apply`); default-graph entries may reference anything.

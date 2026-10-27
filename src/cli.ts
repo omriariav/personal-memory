@@ -223,7 +223,10 @@ async function cmdAdd(argv: string[]) {
 
   // An update keeps the entry's own membership — a re-capture must never
   // silently relocate an entry between graphs. Reclassify explicitly instead.
-  const graphs: string[] = target ? target.graphs : [requestedGraph];
+  // A NEW capture always homes in the default graph, even when a graph was
+  // named: `--graph` now queues a candidate for review rather than writing
+  // into that store, so every memory has a private home to come back to.
+  const graphs: string[] = target ? target.graphs : [DEFAULT_GRAPH];
   if (target && values.graph && !target.graphs.includes(requestedGraph)) {
     console.log(
       `↻ ${target.id} lives in [${target.graphs.join(",")}] — --graph ${requestedGraph} ignored; ` +
@@ -333,8 +336,7 @@ async function cmdAdd(argv: string[]) {
     const written = await writeEntryAll(fm, body, graphs, await readVariants(target.paths));
     path = written[DEFAULT_GRAPH] ?? Object.values(written)[0]!;
   } else {
-    if (requestedGraph !== DEFAULT_GRAPH) await ensureStore(requestedGraph);
-    path = await writeEntry(fm, body, requestedGraph);
+    path = await writeEntry(fm, body, DEFAULT_GRAPH);
   }
   const stats = await syncIndex();
   const label = sharedGraphs({ graphs }).length ? ` [${sharedGraphs({ graphs }).join(",")}]` : "";
@@ -347,13 +349,38 @@ async function cmdAdd(argv: string[]) {
   const captured = await markCapturedConnectors(capturedConnectors);
   if (captured.length) console.log(`  connector captured: ${captured.join(", ")}`);
 
-  // Standing distribution rules auto-apply to fresh private captures; a rule
-  // failure must never fail the capture itself.
-  if (!target && requestedGraph === DEFAULT_GRAPH) {
+  // An explicitly named graph is a proposal too, so it goes through the same
+  // review as everything else. Queued before the rules pass, so the user's own
+  // reason is the one that sticks if a rule matches the same entry.
+  if (!target && requestedGraph !== DEFAULT_GRAPH) {
     try {
-      const { applyRules } = await import("./graph-rules.js");
-      const report = await applyRules({ ids: [fm.id] });
+      const { enqueue } = await import("./graph-queue.js");
+      const res = await enqueue({
+        id: fm.id,
+        graph: requestedGraph,
+        reason: "you asked for this graph when capturing it",
+        proposedBy: "add",
+      });
+      console.log(
+        res.queued
+          ? `  → queued for '${requestedGraph}' review: memory queue list --graph ${requestedGraph}`
+          : `  ⚠ not queued for '${requestedGraph}': ${res.refusal}`,
+      );
+    } catch (err) {
+      console.warn(`  ⚠ not queued: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Standing distribution rules propose on every fresh capture — they queue a
+  // candidate, they never publish. A rule failure must not fail the capture.
+  if (!target) {
+    try {
+      const { enqueueRules } = await import("./graph-rules.js");
+      const report = await enqueueRules({ ids: [fm.id] });
       for (const line of report.actions) console.log(`  → rule: ${line}`);
+      if (report.queued > 0) {
+        console.log(`  review queued candidates: memory queue list`);
+      }
     } catch (err) {
       console.warn(`  ⚠ rules not applied: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1439,25 +1466,26 @@ async function cmdQueue(argv: string[]) {
 
 async function cmdRules(argv: string[]) {
   const sub = argv[0];
-  const { readRules, applyRules, matchRule } = await import("./graph-rules.js");
+  const { readRules, enqueueRules, matchRule } = await import("./graph-rules.js");
 
   if (sub === "apply") {
     const { values } = parseArgs({ args: argv.slice(1), options: { "dry-run": { type: "boolean" } } });
     const dryRun = Boolean(values["dry-run"]);
-    const report = await applyRules({ dryRun });
+    const report = await enqueueRules({ dryRun });
     for (const c of report.plan.conflicts) console.log(`⚠ skipped ${c.id}: ${c.reason}`);
     if (dryRun) {
-      for (const a of report.plan.actions) console.log(`would ${a.action} ${a.id} → ${a.graph}`);
-      console.log(`\n${report.plan.actions.length} action(s), ${report.plan.conflicts.length} conflict(s) — dry run, nothing changed`);
+      for (const a of report.plan.actions) console.log(`would queue ${a.id} → ${a.graph} (${a.action})`);
+      console.log(`\n${report.plan.actions.length} candidate(s), ${report.plan.conflicts.length} conflict(s) — dry run, nothing queued`);
       return;
     }
     for (const line of report.actions) console.log(`✓ ${line}`);
     for (const b of report.blocked) {
-      console.log(`✗ blocked ${b.id} → ${b.graph}: references non-members ${b.ids.join(", ")}`);
+      console.log(`⚠ ${b.id} → ${b.graph} is queued but references non-members: ${b.ids.join(", ")}`);
     }
     console.log(
-      `\n${report.copied} copied, ${report.moved} moved, ${report.skippedConflicts} conflict(s), ${report.blocked.length} blocked`,
+      `\n${report.queued} queued, ${report.skipped} skipped, ${report.skippedConflicts} conflict(s), ${report.blocked.length} blocked`,
     );
+    if (report.queued > 0) console.log(`Review them: memory queue list`);
     return;
   }
 
