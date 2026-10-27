@@ -34,6 +34,7 @@ const STATIC: Record<string, { file: string; mime: string }> = {
   "/graph-model.js": { file: "graph-model.js", mime: "text/javascript; charset=utf-8" },
   "/graph-sim.js": { file: "graph-sim.js", mime: "text/javascript; charset=utf-8" },
   "/graphs-map.js": { file: "graphs-map.js", mime: "text/javascript; charset=utf-8" },
+  "/queue-map.js": { file: "queue-map.js", mime: "text/javascript; charset=utf-8" },
   "/combobox.js": { file: "combobox.js", mime: "text/javascript; charset=utf-8" },
   "/style.css": { file: "style.css", mime: "text/css; charset=utf-8" },
 };
@@ -482,6 +483,160 @@ async function apiApplyRules(req: IncomingMessage, res: ServerResponse): Promise
   }
 }
 
+/**
+ * Review-queue endpoints. `/api/queue*` is a sibling of `/api/graphs*` rather
+ * than nested under it, so it has no interaction with that prefix's
+ * catch-all slug branch. (The UI hash `#/graphs/queue` needs its own
+ * reservation; that is `RESERVED_SLUGS` in graphs.ts, the way `rules` already
+ * works.)
+ *
+ * Every mutation needs `confirm: true`. Approving is the only write in this
+ * server that puts something into a store whose purpose is to be handed to
+ * other people, so it gets the same gate as graph creation and deletion.
+ */
+
+/** Map the queue module's typed errors onto status codes — never by message. */
+async function queueError(res: ServerResponse, err: unknown): Promise<void> {
+  const q = await import("./graph-queue.js");
+  if (err instanceof q.UnknownGraphError) {
+    sendJson(res, 404, { error: err.message });
+  } else if (err instanceof q.UnknownCandidateError) {
+    sendJson(res, 404, { error: err.message });
+  } else if (err instanceof q.BlockedCandidateError) {
+    sendJson(res, 409, { error: err.message, blockedBy: err.blockedBy });
+  } else if (err instanceof q.StaleSummaryError) {
+    sendJson(res, 409, { error: err.message, stale: true });
+  } else {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function apiQueue(res: ServerResponse, graph?: string): Promise<void> {
+  if (graph === DEFAULT_GRAPH) {
+    sendJson(res, 400, { error: "the default graph is every entry's home — it has no review queue" });
+    return;
+  }
+  const catalog = await openCatalogOr503(res);
+  if (!catalog) return;
+  try {
+    if (graph) storeFor(graph); // registry validation before we build a view
+  } catch {
+    sendJson(res, 404, { error: `unknown graph '${graph}'` });
+    return;
+  }
+  const { queueView } = await import("./graph-queue.js");
+  const view = await queueView(graph ? { graph } : {});
+  sendJson(res, 200, {
+    ...view,
+    rows: view.rows.map((r) => ({ ...r, path: relative(ROOT, r.path) })),
+  });
+}
+
+async function apiQueueApprove(req: IncomingMessage, res: ServerResponse, graph: string): Promise<void> {
+  let data: Record<string, unknown>;
+  try {
+    data = (JSON.parse((await readBody(req, 32 * 1024)) || "{}") ?? {}) as Record<string, unknown>;
+  } catch (err) {
+    sendJson(res, (err as { status?: number }).status ?? 400, {
+      error: err instanceof Error ? err.message : "invalid JSON body",
+    });
+    return;
+  }
+  if (data.confirm !== true) {
+    sendJson(res, 400, { error: "publishing into a shared graph requires confirm: true" });
+    return;
+  }
+  const id = typeof data.id === "string" ? data.id : "";
+  if (!id) {
+    sendJson(res, 400, { error: "id is required" });
+    return;
+  }
+  const variant = data.variant === "summary" ? "summary" : "raw";
+  try {
+    const { approveCandidate } = await import("./graph-queue.js");
+    const result = await approveCandidate({ id, graph, variant });
+    sendJson(res, 200, { ...result, path: relative(ROOT, result.path) });
+  } catch (err) {
+    await queueError(res, err);
+  }
+}
+
+async function apiQueueDismiss(req: IncomingMessage, res: ServerResponse, graph: string): Promise<void> {
+  let data: Record<string, unknown>;
+  try {
+    data = (JSON.parse((await readBody(req, 32 * 1024)) || "{}") ?? {}) as Record<string, unknown>;
+  } catch (err) {
+    sendJson(res, (err as { status?: number }).status ?? 400, {
+      error: err instanceof Error ? err.message : "invalid JSON body",
+    });
+    return;
+  }
+  if (data.confirm !== true) {
+    sendJson(res, 400, { error: "declining a candidate requires confirm: true" });
+    return;
+  }
+  const id = typeof data.id === "string" ? data.id : "";
+  if (!id) {
+    sendJson(res, 400, { error: "id is required" });
+    return;
+  }
+  try {
+    const { dismissCandidate } = await import("./graph-queue.js");
+    await dismissCandidate({
+      id,
+      graph,
+      ...(typeof data.reason === "string" && data.reason ? { reason: data.reason } : {}),
+    });
+    sendJson(res, 200, { dismissed: true, id, graph });
+  } catch (err) {
+    await queueError(res, err);
+  }
+}
+
+/**
+ * Queue a blocked candidate's blocker, so the user can clear a blockage from
+ * the card rather than dropping to the CLI. It proposes — it does not approve.
+ */
+async function apiQueueEnqueue(req: IncomingMessage, res: ServerResponse, graph: string): Promise<void> {
+  let data: Record<string, unknown>;
+  try {
+    data = (JSON.parse((await readBody(req, 32 * 1024)) || "{}") ?? {}) as Record<string, unknown>;
+  } catch (err) {
+    sendJson(res, (err as { status?: number }).status ?? 400, {
+      error: err instanceof Error ? err.message : "invalid JSON body",
+    });
+    return;
+  }
+  if (data.confirm !== true) {
+    sendJson(res, 400, { error: "queueing a candidate requires confirm: true" });
+    return;
+  }
+  const id = typeof data.id === "string" ? data.id : "";
+  if (!id) {
+    sendJson(res, 400, { error: "id is required" });
+    return;
+  }
+  try {
+    const { enqueue } = await import("./graph-queue.js");
+    const because = typeof data.becauseOf === "string" ? data.becauseOf : "";
+    const result = await enqueue({
+      id,
+      graph,
+      reason: because
+        ? `needed in '${graph}' before '${because}' can join — it is referenced by it`
+        : `queued from the review screen`,
+      proposedBy: "review",
+    });
+    if (!result.queued) {
+      sendJson(res, 409, { error: result.refusal ?? "could not be queued" });
+      return;
+    }
+    sendJson(res, 200, result);
+  } catch (err) {
+    await queueError(res, err);
+  }
+}
+
 function slugKind(value: unknown): SlugKind | null {
   return value === "person" || value === "team" || value === "tag" ? value : null;
 }
@@ -707,6 +862,22 @@ export function startServer(opts: { port: number; open: boolean }): Promise<neve
         else if (req.method === "GET") await apiGraphManifest(res, slug);
         else if (req.method === "PUT") await apiPutGraphManifest(req, res, slug);
         else if (req.method === "DELETE") await apiDeleteGraph(req, res, slug);
+        else sendJson(res, 405, { error: "method not allowed" });
+      } else if (url.pathname === "/api/queue") {
+        if (req.method === "GET") await apiQueue(res);
+        else sendJson(res, 405, { error: "method not allowed" });
+      } else if (url.pathname.startsWith("/api/queue/")) {
+        // Exact-segment parse, not a prefix test: a graph slugged
+        // `queue-archive` must not be swallowed by `startsWith`.
+        const rest = url.pathname.slice("/api/queue/".length);
+        const slash = rest.indexOf("/");
+        const slug = slash === -1 ? rest : rest.slice(0, slash);
+        const action = slash === -1 ? "" : rest.slice(slash + 1);
+        if (!GRAPH_SLUG.test(slug)) sendJson(res, 404, { error: "not found" });
+        else if (action === "" && req.method === "GET") await apiQueue(res, slug);
+        else if (action === "approve" && req.method === "POST") await apiQueueApprove(req, res, slug);
+        else if (action === "dismiss" && req.method === "POST") await apiQueueDismiss(req, res, slug);
+        else if (action === "enqueue" && req.method === "POST") await apiQueueEnqueue(req, res, slug);
         else sendJson(res, 405, { error: "method not allowed" });
       } else if (url.pathname === "/api/maintenance") {
         if (req.method === "GET") await apiMaintenance(res);
