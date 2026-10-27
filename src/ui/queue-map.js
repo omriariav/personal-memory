@@ -20,8 +20,8 @@ import { esc } from "./graph-model.js";
 
 const VB_W = 980;
 const HUB_X = 86;
-const GATE_X = 660;
-const NODE_X = 762;
+const GATE_X = 468;
+const NODE_X = 570;
 const R_HUB = 54;
 const R_MIN = 20;
 const R_MAX = 34;
@@ -188,7 +188,7 @@ export function renderQueueMap(host, lanes, selected) {
   const rows = laneRows(lanes, selected);
   const h = queueMapHeight(rows.length);
   const hubY = h / 2;
-  const totalMembers = lanes.reduce((n, l) => n + l.members, 0);
+  const waiting = lanes.reduce((n, l) => n + l.pending, 0);
 
   host.innerHTML = `
     <div class="qmap">
@@ -196,7 +196,7 @@ export function renderQueueMap(host, lanes, selected) {
         <g class="gnode gnode-hub" aria-hidden="true">
           <circle class="gnode-disc" cx="${HUB_X}" cy="${hubY}" r="${R_HUB}"/>
           <text class="gnode-n" x="${HUB_X}" y="${hubY - 2}" text-anchor="middle">default</text>
-          <text class="qlane-sub" x="${HUB_X}" y="${hubY + 15}" text-anchor="middle">${totalMembers}</text>
+          <text class="qlane-sub" x="${HUB_X}" y="${hubY + 16}" text-anchor="middle">${waiting} waiting</text>
         </g>
         ${rows.map((r, i) => lane(r, i, hubY)).join("")}
       </svg>
