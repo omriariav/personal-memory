@@ -5,11 +5,14 @@ import {
   defaultMode,
   entryGraphs,
   labelSet,
+  MIN_TAG_DEGREE,
+  modeForTypes,
   modeLabel,
   nodeTip,
   presetTypes,
   projectGraph,
   trunc,
+  visibleKindCounts,
 } from "./graph-model.js";
 
 /** @import { GraphEntry, NodeKind } from "./graph-model.js" */
@@ -204,6 +207,54 @@ test("presetTypes and modeLabel agree with the three mode buttons", () => {
   assert.deepEqual(presetTypes("topics"), { person: false, tag: true, team: false, entry: false });
   assert.deepEqual(presetTypes("entries"), { person: true, tag: false, team: false, entry: true });
   assert.equal(modeLabel("custom"), "custom");
+});
+
+test("the one-off tag floor holds whichever other kinds are switched on", () => {
+  const m = buildGraph([
+    entry({ id: "a", people: ["jane"], tags: ["shared", "solo-a"] }),
+    entry({ id: "b", people: ["jane"], tags: ["shared", "solo-b"] }),
+  ]);
+  const opts = { minTagDegree: MIN_TAG_DEGREE };
+  const tagsDrawn = (/** @type {Record<NodeKind, boolean>} */ types) =>
+    projectGraph(m, types, {}, opts).nodes.filter((n) => n.kind === "tag").length;
+  // switching on another kind must not change which tags exist — the floor is
+  // a property of tags, not of the mode a type selection happens to name
+  assert.equal(tagsDrawn({ person: false, tag: true, team: false, entry: false }), 1, "tags alone");
+  assert.equal(tagsDrawn({ person: false, tag: true, team: false, entry: true }), 1, "tags + entries");
+  assert.equal(tagsDrawn({ person: true, tag: true, team: false, entry: false }), 1, "tags + people");
+  assert.equal(tagsDrawn(ALL), 1, "every kind on");
+});
+
+test("visibleKindCounts counts what the canvas would draw, not the raw model", () => {
+  const m = buildGraph([
+    entry({ id: "a", people: ["jane"], tags: ["shared", "solo-a"] }),
+    entry({ id: "b", people: ["jane"], tags: ["shared", "solo-b"] }),
+  ]);
+  // 3 distinct tags, but only "shared" clears the topics floor of 2
+  assert.equal([...m.nodes.values()].filter((n) => n.kind === "tag").length, 3);
+  assert.equal(visibleKindCounts(m, {}, { minTagDegree: 2 }).tag, 1);
+  // a kind that is switched off still reports what turning it on would draw
+  assert.equal(visibleKindCounts(m, {}, { minTagDegree: 2 }).person, 1);
+  // no floor (people/entries modes) counts every tag
+  assert.equal(visibleKindCounts(m, {}).tag, 3);
+  // the tag held by the filter survives the floor, and is counted
+  assert.equal(visibleKindCounts(m, {}, { minTagDegree: 2, keepTag: "solo-a" }).tag, 2);
+  // the count never disagrees with the projection it mirrors
+  for (const opts of [{ minTagDegree: 2 }, {}, { minTagDegree: 2, keepTag: "solo-a" }]) {
+    const drawn = projectGraph(m, ALL, {}, opts).nodes.filter((n) => n.kind === "tag").length;
+    assert.equal(visibleKindCounts(m, {}, opts).tag, drawn);
+  }
+});
+
+test("modeForTypes names a selection that matches a preset, custom otherwise", () => {
+  // toggling a kind chip off and back on lands on exactly the preset again —
+  // it must read as that mode, or the view silently loses the mode's rules
+  // (the topics tag-degree floor, the topics label cap).
+  for (const mode of /** @type {const} */ (["people", "topics", "entries"])) {
+    assert.equal(modeForTypes(presetTypes(mode)), mode);
+  }
+  assert.equal(modeForTypes({ person: true, tag: true, team: true, entry: true }), "custom");
+  assert.equal(modeForTypes({ person: false, tag: false, team: false, entry: false }), "custom");
 });
 
 test("a shared graph opens on topics, the default graph on people", () => {

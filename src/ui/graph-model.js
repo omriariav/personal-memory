@@ -56,6 +56,13 @@ export const KINDS = [
 /** how many tag labels the topics view draws */
 export const MAX_TOPIC_LABELS = 14;
 
+/** A tag seen in a single entry is noise on the canvas — one dot per one-off
+ * phrasing — so the view hides it whenever tags are drawn. This is a property
+ * of tags, not of a mode: keying it to a mode name meant switching on another
+ * kind silently changed which tags existed. The tag held by the tag filter is
+ * always exempt (see projectGraph's keepTag). */
+export const MIN_TAG_DEGREE = 2;
+
 // ---------- small helpers ----------
 
 /** @param {unknown} s */
@@ -90,6 +97,20 @@ export function presetTypes(mode) {
  * @param {string} graph @returns {Exclude<GraphMode, "custom">} */
 export function defaultMode(graph) {
   return graph === "default" ? "people" : "topics";
+}
+
+/** The mode a type selection amounts to. Toggling a kind chip can land back on
+ * exactly a preset, and that has to read as the preset again — the mode carries
+ * rules the chips don't (the topics tag-degree floor, the topics label cap), so
+ * a selection stuck on "custom" renders a different graph from the identical
+ * selection reached with the mode button.
+ * @param {Record<NodeKind, boolean>} types @returns {GraphMode} */
+export function modeForTypes(types) {
+  for (const mode of /** @type {Exclude<GraphMode, "custom">[]} */ (["people", "topics", "entries"])) {
+    const preset = presetTypes(mode);
+    if (KINDS.every(({ kind }) => preset[kind] === types[kind])) return mode;
+  }
+  return "custom";
 }
 
 /** @param {GraphMode} mode */
@@ -180,6 +201,36 @@ export function buildGraph(entries) {
   return { nodes, edges, memberships };
 }
 
+/** The rules a node must clear that are independent of which kinds are switched
+ * on — the entry-type filter and the topics tag-degree floor. Shared by the
+ * projection and the toolbar counts so a chip can never promise a node the
+ * canvas won't draw.
+ * @param {GNode} n
+ * @param {Record<string, boolean>} entryTypes
+ * @param {{ minTagDegree?: number, keepTag?: string }} opts
+ */
+function nodeAllowed(n, entryTypes, opts) {
+  return (
+    (n.kind !== "entry" || entryTypes[n.etype] !== false) &&
+    (n.kind !== "tag" || n.deg >= (opts.minTagDegree ?? 1) || n.label === opts.keepTag)
+  );
+}
+
+/** How many nodes of each kind the canvas would draw if that kind were switched
+ * on. Counting the raw model instead overstates the topics view by every tag
+ * sitting below the degree floor.
+ * @param {{ nodes: Map<string, GNode> }} model
+ * @param {Record<string, boolean>} entryTypes
+ * @param {{ minTagDegree?: number, keepTag?: string }} [opts]
+ * @returns {Record<NodeKind, number>}
+ */
+export function visibleKindCounts(model, entryTypes, opts = {}) {
+  /** @type {Record<NodeKind, number>} */
+  const counts = { person: 0, tag: 0, team: 0, entry: 0 };
+  for (const n of model.nodes.values()) if (nodeAllowed(n, entryTypes, opts)) counts[n.kind]++;
+  return counts;
+}
+
 /**
  * Project the full model onto the enabled node kinds. Direct entity↔entity
  * co-occurrence links (weighted by shared entries) are always present — the
@@ -191,12 +242,7 @@ export function buildGraph(entries) {
  * @returns {{ nodes: GNode[], edges: GEdge[], hasCo: boolean }}
  */
 export function projectGraph(model, types, entryTypes, opts = {}) {
-  const visible = [...model.nodes.values()].filter(
-    (n) =>
-      types[n.kind] &&
-      (n.kind !== "entry" || entryTypes[n.etype] !== false) &&
-      (n.kind !== "tag" || n.deg >= (opts.minTagDegree ?? 1) || n.label === opts.keepTag),
-  );
+  const visible = [...model.nodes.values()].filter((n) => types[n.kind] && nodeAllowed(n, entryTypes, opts));
   const ids = new Set(visible.map((n) => n.id));
   /** @type {Map<string, GEdge>} */
   const co = new Map();
