@@ -62,6 +62,18 @@ One memory can be a member of several graphs. The CLI materializes
 byte-identical copies and keeps them in sync on every later update, with the
 default graph always the home.
 
+There is one deliberate exception. A shared copy may carry a **declared
+variant** — a redaction or condensation you approved in the review queue,
+published in place of the entry's own words. The copy keeps the entry's id,
+date, title and every reference; only the body differs, and it records
+`variant_of_hash`, the home body's hash at the moment you approved it. That
+is what separates an approved variant from drift: `graphs sync` leaves it
+alone instead of repairing it from the home. Edit the private entry later and
+the variant does not change — it goes *stale*, and comes back for review so
+you decide what the shared graph should say next. Only the body can be
+redacted, so an entry whose **title** gives it away belongs nowhere but your
+private store.
+
 ![The Manage Graphs screen listing the default graph and one named shared graph, with distribution rules below](assets/ui-graphs.png)
 
 **A capture lands in the default graph unless you explicitly name another one.**

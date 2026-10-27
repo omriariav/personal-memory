@@ -42,9 +42,9 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
 | `open ["<phrasing>" …] [--source <prefix,…>] [filters] [--limit N] [--format json]` | Unresolved `todo`/`pending-decision` entries a new capture may settle, with per-row evidence (source `exact`/`conversation`, query rank + matched terms) and `confidence` `high`/`candidate`; pass confirmed ids to `add --follows`. `add` refuses to settle an open item by rewriting it (retype or self-follow via its own source id) |
 | `unlink <id> --follows <earlier-id,…>` | Remove wrong timeline links (commits every member store); the earlier entry is `[open]` again unless another entry follows it |
 | `link <id> --follows <earlier-id,…>` | Add timeline links to an existing entry (validated: targets exist, not newer, no cycles, containment; commits every member store) |
-| `copy <id> --to <graph>` | Add membership: materialize a synced copy in another graph (entry stays in the default graph too; containment validated; checkpoints the target repo) |
+| `copy <id> --to <graph>` | Add membership: materialize a synced copy in another graph (entry stays in the default graph too; containment validated; checkpoints the target repo). The review queue may pass an approved redaction as the copy's body, recorded as `variant_of_hash` |
 | `move <id> --to <graph>` | Replace the entry's WHOLE membership with `<graph>` (removes every other copy; `--to default` = repatriation; containment validated both directions; checkpoints every affected repo) |
-| `graphs list` / `graphs create <slug> [--display-name\|--description]` / `graphs sync [--dry-run]` / `graphs delete <slug> --confirm` | Registry (dirs under `memory-graphs/` + `GRAPH.md` manifests) / create a graph (own nested repo) / detect+repair drifted copies (the default copy wins) / permanently delete a graph (user-approved only; blocked while entries exist only there) |
+| `graphs list` / `graphs create <slug> [--display-name\|--description]` / `graphs sync [--dry-run]` / `graphs delete <slug> --confirm` | Registry (dirs under `memory-graphs/` + `GRAPH.md` manifests) / create a graph (own nested repo) / detect+repair drifted copies (the default copy wins; declared variants are reported, never repaired) / permanently delete a graph (user-approved only; blocked while entries exist only there) |
 | `rules list` / `rules apply [--dry-run]` | Standing per-tag/per-type distribution rules (`memory/graphs/rules.json`); apply reconciles them against existing default-graph entries — dry-run first |
 | `promote candidates --to <graph> [--since\|--until\|--limit]` | Default-graph entries awaiting promotion review for a graph (target REQUIRED; per-graph dismissals hidden until content changes; non-member-ref blockers flagged) |
 | `promote dismiss <id> --graph <g> [--reason "…"]` | Record a "not for that graph" decision — hidden from its candidates until the entry's content changes |
@@ -75,7 +75,13 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
   one entry may be a member of several graphs as byte-identical synced copies
   (default-first sorted `graphs` list; multi-member ⇒ the default graph is
   the home). The CLI keeps copies in sync on every update; drift is detected
-  at load and repaired by `graphs sync` (the default copy wins). Ids are
+  at load and repaired by `graphs sync` (the default copy wins). The ONE
+  exception is a **declared variant**: a shared copy carrying
+  `variant_of_hash` (the home's BODY hash at approval time) holds a
+  user-approved redaction instead of the home's body. It is not drift, is
+  never repaired from the home, and takes frontmatter updates while keeping
+  its own words; once the home's body changes it is reported stale by
+  `graphs sync` and re-proposed for review. Ids are
   unique per logical entry across ALL stores. **Capture always lands in the
   default graph**; entries enter shared graphs via standing rules
   (auto-applied at capture + `rules apply` backfills), the user-confirmed

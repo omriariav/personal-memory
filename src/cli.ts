@@ -6,6 +6,7 @@ import { FrontmatterSchema, type Frontmatter } from "./schema.js";
 import {
   makeId,
   writeEntry,
+  readVariants,
   writeEntryAll,
   entryPath,
   hashEntry,
@@ -325,8 +326,11 @@ async function cmdAdd(argv: string[]) {
 
   let path: string;
   if (target) {
-    // Refresh EVERY materialization so the copy-sync invariant holds.
-    const written = await writeEntryAll(fm, body, graphs);
+    // Refresh EVERY materialization so the copy-sync invariant holds — except
+    // a declared variant's body, which is a user-approved redaction: it takes
+    // the new frontmatter and keeps its own words, going stale (and back into
+    // the review queue) rather than being overwritten with the private text.
+    const written = await writeEntryAll(fm, body, graphs, await readVariants(target.paths));
     path = written[DEFAULT_GRAPH] ?? Object.values(written)[0]!;
   } else {
     if (requestedGraph !== DEFAULT_GRAPH) await ensureStore(requestedGraph);
@@ -511,8 +515,23 @@ async function cmdGraphs(argv: string[]) {
     for (const v of report.containmentViolations) {
       console.log(`⚠ ${v.id} [${v.graph}] references non-members: ${v.targets.join(", ")}`);
     }
+    for (const v of report.staleVariants) {
+      console.log(
+        `⚠ ${v.id} [${v.graph}] published summary predates the current entry ` +
+          `(approved against ${v.declared}, now ${v.home}) — the copy is left as published`,
+      );
+    }
+    for (const v of report.variantViolations) {
+      console.log(`⚠ ${v.id} [${v.graph}] claims variant_of_hash but cannot be a variant: ${v.reason}`);
+    }
+    // A current variant is not an issue — it is the approved state. A stale
+    // one is, because the shared graph is quietly behind the private original.
     const issues =
-      report.drift.length + report.homeViolations.length + report.containmentViolations.length;
+      report.drift.length +
+      report.homeViolations.length +
+      report.containmentViolations.length +
+      report.staleVariants.length +
+      report.variantViolations.length;
     console.log(
       issues === 0
         ? "✓ all graphs consistent"

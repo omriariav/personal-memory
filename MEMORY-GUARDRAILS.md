@@ -10,8 +10,10 @@ hard contract, not a style preference.**
 with shell redirection, not "just this once". The store is one DEFAULT graph
 (`memory/` — secret, local-only) plus N named shared graphs (`memory-graphs/<slug>/`), each its
 own nested git repo — and the contract covers every store equally. One entry
-can be a member of several graphs (byte-identical synced copies); ONLY the
-CLI keeps them in sync.
+can be a member of several graphs (byte-identical synced copies, unless a
+shared copy declares `variant_of_hash` — a user-approved redaction published
+through the review queue, which diverges in BODY only); ONLY the CLI keeps
+them in sync.
 
 - **Capture** goes ONLY through the CLI and ALWAYS lands in the default graph:
   `npx tsx src/cli.ts add --title … --type … [--people …] [--source-ids …] --body "…"`
@@ -34,7 +36,11 @@ CLI keeps them in sync.
   Never place an entry in a shared graph the user hasn't approved (a saved
   rule IS standing approval).
 - **Consistency**: drifted copies are repaired ONLY by `cli.ts graphs sync`
-  (the default copy wins, checkpointed) — never by hand-editing a copy.
+  (the default copy wins, checkpointed) — never by hand-editing a copy. A copy
+  declaring `variant_of_hash` is NOT drift and is NEVER overwritten: rewriting
+  an approved redaction from the home would publish the private wording it was
+  written to keep out. When the home's body changes, the variant is reported
+  stale and re-proposed for review; the published copy stays as approved.
 - **Graph deletion** ONLY through `cli.ts graphs delete <slug> --confirm` (or
   the UI's confirm modal) and ONLY after the user explicitly approves — it is
   permanent (store + git history). Blocked while any entry exists only in

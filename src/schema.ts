@@ -66,6 +66,28 @@ export const FrontmatterSchema = z
      * `updated` records when a same-source re-capture last changed this entry.
      */
     updated: isoDate.optional(),
+    /**
+     * Present ONLY on a shared-graph copy whose BODY was deliberately replaced
+     * by a user-approved redaction or condensation, via the review queue.
+     * Holds the home entry's BODY hash at approval time.
+     *
+     * This is what makes the divergence *declared* rather than drift: without
+     * it, any byte difference between copies is a bug that `graphs sync`
+     * repairs from the home. With it, `graphs sync` can tell an approved
+     * variant from drift, and a current variant from one whose home has since
+     * moved on. Never present on the default-graph (home) copy — the home is
+     * not a variant of anything.
+     *
+     * Body-only on purpose: a variant's frontmatter stays synced with its home,
+     * so tag merges and chain links still propagate. Hashing the whole entry
+     * would mark every variant in the store stale on any frontmatter change.
+     * The corollary is that a sensitive *title* cannot be redacted — such an
+     * entry is declined, not summarized.
+     */
+    variant_of_hash: z
+      .string()
+      .regex(/^[0-9a-f]{16}$/, "must be a 16-hex body hash")
+      .optional(),
   })
   .strict();
 
@@ -191,6 +213,22 @@ export interface MemoryEntry extends Frontmatter {
    * file locations; excluded from the content hash.
    */
   graphs: string[];
+  /**
+   * Shared graphs whose copy is a declared variant: graph → the home BODY hash
+   * that copy was approved against. Absent when no copy diverges. Derived from
+   * the copies' own `variant_of_hash`, never from the home's frontmatter, and
+   * excluded from the content hash — publishing a variant must not change the
+   * logical entry's identity.
+   *
+   * A graph in here holds text the private home does not. Readers that quote
+   * an entry into shared output must read that copy, not `body`.
+   */
+  variants?: Record<string, string>;
+}
+
+/** Whether this entry's copy in `graph` is a declared variant of the home. */
+export function isVariantIn(e: Pick<MemoryEntry, "variants">, graph: string): boolean {
+  return e.variants?.[graph] !== undefined;
 }
 
 /** Memberships other than private (the labels shown in listings). */

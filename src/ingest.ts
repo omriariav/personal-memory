@@ -23,10 +23,20 @@ const hashMemo = new WeakMap<MemoryEntry, string>();
 
 /** The canonical content hash: frontmatter (minus `updated`) + body. */
 function hashOf(fm: Frontmatter, body: string): string {
-  const { updated: _u, ...rest } = fm;
+  const { updated: _u, variant_of_hash: _v, ...rest } = fm;
   const h = createHash("sha256");
   h.update(JSON.stringify({ ...rest, body }));
   return h.digest("hex").slice(0, 16);
+}
+
+/**
+ * Hash of a body alone — the anchor a declared variant records in its
+ * `variant_of_hash`. Body-only so a frontmatter change (a tag merge, a new
+ * chain link) propagates to the variant without marking it stale; only a
+ * change to the words themselves means the published redaction is out of date.
+ */
+export function hashBody(body: string): string {
+  return createHash("sha256").update(body.trim()).digest("hex").slice(0, 16);
 }
 
 /** Stable content hash for incremental indexing (frontmatter + body). */
@@ -42,8 +52,11 @@ function frontmatterOf(e: MemoryEntry): Frontmatter {
   // `updated` is excluded so a refresh-date bump never churns the index and so
   // content-equality can be tested via the hash alone. `graphs`/`paths` are
   // excluded because membership is derived from location — copying or moving
-  // an entry between stores must never change its content hash.
-  const { body: _b, path: _p, updated: _u, graphs: _g, paths: _ps, ...fm } = e;
+  // an entry between stores must never change its content hash. `variants` is
+  // excluded for the same reason: publishing a redaction into a shared graph
+  // is a membership event, and if it moved the logical hash it would churn the
+  // index and invalidate every promotion dismissal keyed on that hash.
+  const { body: _b, path: _p, updated: _u, graphs: _g, paths: _ps, variants: _v, ...fm } = e;
   return fm;
 }
 
@@ -198,15 +211,55 @@ export interface CopyDrift {
 }
 
 /**
+ * A declared variant whose home body has changed since it was approved. The
+ * published copy is still valid — it is simply behind — so this is reported,
+ * never repaired: overwriting a redaction with the home's raw bytes is the
+ * exact leak the variant mechanism exists to prevent.
+ */
+export interface StaleVariant {
+  id: string;
+  graph: GraphId;
+  path: string;
+  /** The home body hash the copy was approved against. */
+  declared: string;
+  /** The home body hash now. */
+  home: string;
+}
+
+/**
+ * A copy claiming to be a variant that cannot be one: `variant_of_hash` on the
+ * default-graph file (the home is not a variant of itself), or on a copy whose
+ * entry has no home at all (nothing to diverge from). Reported, never honored.
+ */
+export interface VariantViolation {
+  id: string;
+  graph: GraphId;
+  path: string;
+  reason: "home-declares-variant" | "no-home";
+}
+
+/**
  * Group per-store materializations into logical entries (synced-copy
- * membership model). All copies of an id must be content-identical; a
- * mismatch is DRIFT — thrown by default (reads must never silently pick a
- * side or write repairs) or collected for `graphs sync`.
+ * membership model). Copies of an id must be content-identical UNLESS a
+ * shared-graph copy declares `variant_of_hash` — a user-approved redaction
+ * published through the review queue. An undeclared mismatch is DRIFT —
+ * thrown by default (reads must never silently pick a side or write repairs)
+ * or collected for `graphs sync`.
+ *
+ * A declared variant never throws, even when its home has moved on: the
+ * published copy is still a valid thing to have shared, just behind. It comes
+ * back in `staleVariants` for `graphs sync` to report and the review queue to
+ * re-propose.
  */
 export function groupEntries(
   files: FileEntry[],
   onDrift: "throw" | "collect" = "throw",
-): { entries: MemoryEntry[]; drift: CopyDrift[] } {
+): {
+  entries: MemoryEntry[];
+  drift: CopyDrift[];
+  staleVariants: StaleVariant[];
+  variantViolations: VariantViolation[];
+} {
   const byId = new Map<string, FileEntry[]>();
   for (const f of files) {
     const group = byId.get(f.id);
@@ -216,11 +269,34 @@ export function groupEntries(
 
   const entries: MemoryEntry[] = [];
   const drift: CopyDrift[] = [];
+  const staleVariants: StaleVariant[] = [];
+  const variantViolations: VariantViolation[] = [];
   for (const [id, group] of byId) {
-    if (new Set(group.map((f) => f.hash)).size > 1) {
+    // A variant is only meaningful against a private home to diverge from, and
+    // the home itself can never be one. Anything else claiming to be a variant
+    // is demoted to a plain copy, so it still faces the drift check below
+    // rather than using the field to hide a real mismatch.
+    const homeFile = group.find((f) => f.graph === DEFAULT_GRAPH);
+    const variantFiles: FileEntry[] = [];
+    const plain: FileEntry[] = [];
+    for (const f of group) {
+      if (f.variant_of_hash === undefined) {
+        plain.push(f);
+      } else if (f.graph === DEFAULT_GRAPH) {
+        variantViolations.push({ id, graph: f.graph, path: f.path, reason: "home-declares-variant" });
+        plain.push(f);
+      } else if (!homeFile) {
+        variantViolations.push({ id, graph: f.graph, path: f.path, reason: "no-home" });
+        plain.push(f);
+      } else {
+        variantFiles.push(f);
+      }
+    }
+
+    if (new Set(plain.map((f) => f.hash)).size > 1) {
       const d: CopyDrift = {
         id,
-        copies: group.map((f) => ({ graph: f.graph, path: f.path, hash: f.hash })),
+        copies: plain.map((f) => ({ graph: f.graph, path: f.path, hash: f.hash })),
       };
       if (onDrift === "throw") {
         throw new Error(
@@ -232,16 +308,34 @@ export function groupEntries(
       drift.push(d);
       continue;
     }
+
     const graphs = sortGraphs(group.map((f) => f.graph));
     const paths: Record<string, string> = {};
     for (const f of group) paths[f.graph] = f.path;
-    const home = group.find((f) => f.graph === DEFAULT_GRAPH) ?? group[0]!;
+    // The logical entry is always the home's content — including its body, so
+    // the index and every hash-keyed decision stay anchored to the private
+    // original rather than to whichever redaction happens to exist.
+    const home = homeFile ?? plain[0] ?? group[0]!;
     const { graph: _g, hash, ...rest } = home;
     const entry: MemoryEntry = { ...rest, path: home.path, graphs, paths };
+
+    if (variantFiles.length > 0) {
+      const homeBodyHash = hashBody(home.body);
+      const variants: Record<string, string> = {};
+      for (const f of variantFiles) {
+        const declared = f.variant_of_hash!;
+        variants[f.graph] = declared;
+        if (declared !== homeBodyHash) {
+          staleVariants.push({ id, graph: f.graph, path: f.path, declared, home: homeBodyHash });
+        }
+      }
+      entry.variants = variants;
+    }
+
     hashMemo.set(entry, hash);
     entries.push(entry);
   }
-  return { entries, drift };
+  return { entries, drift, staleVariants, variantViolations };
 }
 
 /** Load every memory as logical entries (grouped across stores). Throws on drift. */
@@ -369,16 +463,72 @@ export async function writeEntryAll(
   fm: Frontmatter,
   body: string,
   graphs: string[],
+  variants: Record<string, string> = {},
 ): Promise<Record<string, string>> {
-  const file = matter.stringify(`\n${body.trim()}\n`, fm);
+  const { variant_of_hash: _v, ...plainFm } = fm;
+  const file = matter.stringify(`\n${body.trim()}\n`, plainFm);
   const out: Record<string, string> = {};
   for (const graph of graphs) {
     const path = entryPath(fm, graph);
     await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(path, file, "utf8");
+    const declared = variants[graph];
+    if (declared === undefined) {
+      await writeFile(path, file, "utf8");
+      out[graph] = path;
+      continue;
+    }
+    // A declared variant's body is a user-approved redaction — writing the
+    // home's body over it would push private wording into a shared store,
+    // which is the exact leak the variant mechanism exists to prevent. Sync
+    // the frontmatter so tag merges and chain links still propagate, and keep
+    // `variant_of_hash` at the home revision it was approved against, so a
+    // changed home leaves the copy *stale* and the review queue re-proposes it.
+    const existing = matter(await readFile(path, "utf8"));
+    await writeFile(
+      path,
+      matter.stringify(`\n${existing.content.trim()}\n`, { ...plainFm, variant_of_hash: declared }),
+      "utf8",
+    );
     out[graph] = path;
   }
   return out;
+}
+
+/**
+ * Read which of an entry's copies are declared variants, graph → the home
+ * body hash each was approved against.
+ *
+ * `groupEntries` fills `MemoryEntry.variants` on the file-loading path, but
+ * entries that come from the catalog (every single-entry write path:
+ * copy, move, `add --update`, chain links) are built from index rows and have
+ * no such field. Those act on one entry at a time, so reading its handful of
+ * copies is cheap — and getting it wrong means overwriting a published
+ * redaction with private text, so it is never worth guessing.
+ */
+export async function readVariants(paths: Record<string, string>): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const [graph, path] of Object.entries(paths)) {
+    if (graph === DEFAULT_GRAPH) continue;
+    try {
+      const declared = matter(await readFile(path, "utf8")).data["variant_of_hash"];
+      if (typeof declared === "string" && declared) out[graph] = declared;
+    } catch {
+      // unreadable copy — `graphs sync` is the place that reports it
+    }
+  }
+  return out;
+}
+
+/**
+ * Serialize a declared variant: the entry's own frontmatter plus
+ * `variant_of_hash`, over a replacement body. Everything that makes the copy
+ * the *same* memory — id, date, type, title, people, tags, `follows`,
+ * `sources` — is carried over unchanged, which is what keeps containment,
+ * chains and dedup coherent across the two bodies.
+ */
+export function serializeVariant(e: MemoryEntry, body: string, variantOf: string): string {
+  const fm = frontmatterOf(e);
+  return matter.stringify(`\n${body.trim()}\n`, { ...fm, variant_of_hash: variantOf });
 }
 
 /** Serialize + write a memory file (creating dirs). Returns the path written. */

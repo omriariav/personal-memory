@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { relative, join } from "node:path";
 import matter from "gray-matter";
 import { DEFAULT_GRAPH, FrontmatterSchema, sortGraphs, type Frontmatter, type GraphId, type MemoryEntry } from "./schema.js";
-import { INDEX_DIR, ROOT, writeEntryAll } from "./ingest.js";
+import { INDEX_DIR, ROOT, readVariants, writeEntryAll } from "./ingest.js";
 import { storeFor, validateContainment } from "./graphs.js";
 import type { CatalogEntryMeta } from "./catalog.js";
 import { requireEntry } from "./membership.js";
@@ -460,13 +460,14 @@ async function writeFollows(
   message: string,
   refreshAudit?: boolean,
 ): Promise<ChainLinkResult> {
-  const { body, path: _p, graphs, paths: _paths, follows: _f, ...rest } = entry;
+  const { body, path: _p, graphs, paths, follows: _f, variants: _v, ...rest } = entry;
   const fm = FrontmatterSchema.parse({
     ...rest,
     ...(follows.length ? { follows } : {}),
     updated: new Date().toISOString().slice(0, 10),
   }) as Frontmatter;
-  const written = await writeEntryAll(fm, body, graphs);
+  // A declared variant takes the new frontmatter but keeps its approved body.
+  const written = await writeEntryAll(fm, body, graphs, await readVariants(paths));
   const path = written[DEFAULT_GRAPH] ?? Object.values(written)[0]!;
   const index = await syncIndex();
   // The add-time auto-commit hook only fires on `add`; commit every member

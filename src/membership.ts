@@ -1,7 +1,16 @@
 import { readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { DEFAULT_GRAPH, sortGraphs, type MemoryEntry } from "./schema.js";
-import { entryPath, loadEntryFiles, groupEntries, type CopyDrift } from "./ingest.js";
+import {
+  entryPath,
+  loadEntryFiles,
+  groupEntries,
+  hashBody,
+  readVariants,
+  serializeVariant,
+  type CopyDrift,
+  type StaleVariant,
+} from "./ingest.js";
 import { ensureStore, invalidateStoreCache, requireGraph, storeFor, validateContainment } from "./graphs.js";
 import type { Catalog } from "./catalog.js";
 import { openCatalogForWrite, syncIndex } from "./store.js";
@@ -44,10 +53,24 @@ export interface CopyResult {
   path?: string;
   blockedBy?: string[];
   index?: SyncStats;
+  /** Set when `variantBody` was used: the home body hash it was approved against. */
+  variantOf?: string;
 }
 
-/** Add membership in `to` by materializing the home copy there. */
-export async function copyEntry(opts: { id: string; to: string }): Promise<CopyResult> {
+/**
+ * Add membership in `to` by materializing the home copy there.
+ *
+ * `variantBody` publishes a user-approved redaction instead of the home bytes:
+ * the copy keeps the entry's id, date, type, title and every reference — only
+ * the body differs — and records `variant_of_hash` so the divergence is
+ * declared rather than read as drift. It is only ever supplied by the review
+ * queue, after the user approved that specific text.
+ */
+export async function copyEntry(opts: {
+  id: string;
+  to: string;
+  variantBody?: string;
+}): Promise<CopyResult> {
   const to = requireGraph(opts.to);
   if (to === DEFAULT_GRAPH) {
     throw new Error("copy --to default is meaningless — use 'move <id> --to default' to repatriate");
@@ -73,13 +96,20 @@ export async function copyEntry(opts: { id: string; to: string }): Promise<CopyR
 
   await ensureStore(to);
   await commitMemoryRepo(`Checkpoint before copy: ${entry.id}`, storeFor(to).dir);
-  const raw = await readFile(entry.path, "utf8"); // home bytes, verbatim
+  let raw: string;
+  let variantOf: string | undefined;
+  if (opts.variantBody === undefined) {
+    raw = await readFile(entry.path, "utf8"); // home bytes, verbatim
+  } else {
+    variantOf = hashBody(entry.body);
+    raw = serializeVariant(entry, opts.variantBody, variantOf);
+  }
   const dest = entryPath(entry, to);
   await mkdir(dirname(dest), { recursive: true });
   await writeFile(dest, raw, "utf8");
   const index = await syncIndex();
   await commitMemoryRepo(`Add memory: ${entry.id}`, storeFor(to).dir);
-  return { id: entry.id, to, changed: true, path: dest, index };
+  return { id: entry.id, to, changed: true, path: dest, index, variantOf };
 }
 
 export interface MoveResult {
@@ -105,6 +135,19 @@ export async function moveEntry(opts: { id: string; to: string }): Promise<MoveR
   const entry = await requireEntry(catalog, opts.id);
   if (entry.graphs.length === 1 && entry.graphs[0] === to) {
     return { id: entry.id, to, changed: false };
+  }
+
+  const declaredVariants = Object.keys(await readVariants(entry.paths));
+  if (declaredVariants.length > 0 && to !== DEFAULT_GRAPH) {
+    // A variant exists to diverge from a private home. A move deletes that
+    // home, so the redaction would become the entry's only copy — and if the
+    // move targets the variant's own graph, the write below is skipped
+    // entirely and the raw home is simply deleted out from under it.
+    throw new Error(
+      `'${entry.id}' has a published variant copy in ${declaredVariants.join(", ")} — ` +
+        `a variant needs its private home to diverge from. ` +
+        `Repatriate first: move ${entry.id} --to default (which drops the variants)`,
+    );
   }
 
   if (to !== DEFAULT_GRAPH) {
@@ -256,17 +299,27 @@ export interface SyncGraphsReport {
   homeViolations: { id: string; graphs: string[] }[];
   /** Containment violations across the corpus (report-only). */
   containmentViolations: { id: string; graph: string; targets: string[] }[];
+  /**
+   * Published variants whose home body has moved on (report-only, never
+   * repaired — see the note on the repair loop). These are what the review
+   * queue re-proposes so the user can re-approve or re-draft.
+   */
+  staleVariants: StaleVariant[];
+  /** Copies claiming `variant_of_hash` that cannot be variants (report-only). */
+  variantViolations: { id: string; graph: string; reason: string }[];
 }
 
 /**
  * Corpus-wide consistency check + drift repair. Drifted copies are repaired
  * by rewriting every non-private copy from the private bytes (private wins),
  * checkpointed per store. Home/containment violations are reported, never
- * auto-fixed (they need a human decision: copy targets or move entries).
+ * auto-fixed (they need a human decision: copy targets or move entries), and
+ * so are stale variants — a declared variant is a user-approved redaction, so
+ * "repairing" it would publish the private wording it was written to keep out.
  */
 export async function syncGraphs(opts: { dryRun?: boolean } = {}): Promise<SyncGraphsReport> {
   const files = await loadEntryFiles();
-  const { entries, drift } = groupEntries(files, "collect");
+  const { entries, drift, staleVariants, variantViolations } = groupEntries(files, "collect");
 
   const homeViolations = entries
     .filter((e) => e.graphs.length > 1 && !e.graphs.includes(DEFAULT_GRAPH))
@@ -296,6 +349,8 @@ export async function syncGraphs(opts: { dryRun?: boolean } = {}): Promise<SyncG
       for (const c of others) {
         await commitMemoryRepo(`Checkpoint before graph sync: ${d.id}`, storeFor(c.graph).dir);
       }
+      // `d.copies` comes from groupEntries' plain set, so a declared variant
+      // is never in `others` and can never be overwritten here.
       for (const c of others) await writeFile(c.path, raw, "utf8");
       for (const c of others) {
         await commitMemoryRepo(`Sync memory: ${d.id}`, storeFor(c.graph).dir);
@@ -304,5 +359,12 @@ export async function syncGraphs(opts: { dryRun?: boolean } = {}): Promise<SyncG
     }
     if (repaired.length) await syncIndex();
   }
-  return { drift, repaired, homeViolations, containmentViolations };
+  return {
+    drift,
+    repaired,
+    homeViolations,
+    containmentViolations,
+    staleVariants,
+    variantViolations: variantViolations.map((v) => ({ id: v.id, graph: v.graph, reason: v.reason })),
+  };
 }
