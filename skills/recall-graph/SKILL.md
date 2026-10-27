@@ -68,7 +68,7 @@ check" — that is exactly the leak this skill exists to prevent.
 
 If recall keeps coming up empty, the graph probably just hasn't had a
 promotion review lately — suggest `/promote --to <graph>`
-(`skills/promote-graph/SKILL.md`), the user-confirmed flow that copies
+(`skills/review-queue/SKILL.md`), the user-confirmed flow that copies
 eligible private entries in, or standing distribution rules on the `#/graphs`
 UI screen. Never copy/move entries yourself without the user's explicit
 per-entry confirmation.

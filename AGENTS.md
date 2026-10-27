@@ -25,7 +25,8 @@ sent to any API by default.
   (see `skills/recall-graph/SKILL.md`) — never falls back to other graphs.
 - User wants to review/promote memories into a shared graph →
   **promotion review**, every copy/move user-confirmed
-  (see `skills/promote-graph/SKILL.md`).
+  (see `skills/review-queue/SKILL.md`, and `skills/sweep-graphs/SKILL.md`
+  for the half that proposes them).
 - User wants to create graphs, set up per-tag/per-type distribution rules, or
   repair graph consistency → **graph management**
   (see `skills/manage-graphs/SKILL.md`).
