@@ -20,11 +20,14 @@ import {
   entryGraphs,
   esc,
   labelSet,
+  MIN_TAG_DEGREE,
+  modeForTypes,
   modeLabel,
   nodeTip,
   presetTypes,
   projectGraph,
   trunc,
+  visibleKindCounts,
 } from "./graph-model.js";
 import { H, W, computeFit, createSim, initPositions } from "./graph-sim.js";
 
@@ -143,10 +146,11 @@ export function renderGraphView(mainEl, entries, opts = {}) {
     return counts;
   };
 
-  /** @type {Record<NodeKind, number>} */
-  const kindCounts = { person: 0, tag: 0, team: 0, entry: 0 };
-  const initialModel = buildGraph(entries);
-  for (const n of initialModel.nodes.values()) kindCounts[n.kind]++;
+  /** the projection rules the canvas draws under — the toolbar counts share
+   * them so a chip never promises a node the canvas will not draw */
+  const projOpts = () => ({ minTagDegree: MIN_TAG_DEGREE, keepTag: gstate.tagFilter });
+
+  const kindCounts = visibleKindCounts(buildGraph(graphEntries()), gstate.entryTypes, projOpts());
 
   /** @param {Record<NodeKind, number>} counts */
   const kindChips = (counts) => KINDS.map(
@@ -392,9 +396,7 @@ export function renderGraphView(mainEl, entries, opts = {}) {
 
   /** @param {{ nodes: Map<string, GNode> }} model */
   function syncToolbar(model) {
-    /** @type {Record<NodeKind, number>} */
-    const counts = { person: 0, tag: 0, team: 0, entry: 0 };
-    for (const n of model.nodes.values()) counts[n.kind]++;
+    const counts = visibleKindCounts(model, gstate.entryTypes, projOpts());
     for (const { kind } of KINDS) {
       const chip = mainEl.querySelector(`.gtype[data-kind="${kind}"]`);
       chip?.setAttribute("aria-pressed", String(gstate.types[kind]));
@@ -412,10 +414,7 @@ export function renderGraphView(mainEl, entries, opts = {}) {
   function refresh() {
     const scopedEntries = graphEntries();
     const model = buildGraph(scopedEntries);
-    const proj = projectGraph(model, gstate.types, gstate.entryTypes, {
-      minTagDegree: gstate.mode === "topics" ? 2 : 1,
-      keepTag: gstate.tagFilter,
-    });
+    const proj = projectGraph(model, gstate.types, gstate.entryTypes, projOpts());
     nodes = proj.nodes;
     edges = proj.edges;
     hasCo = proj.hasCo;
@@ -520,8 +519,8 @@ export function renderGraphView(mainEl, entries, opts = {}) {
   mainEl.querySelectorAll(".gtype").forEach((chip) => {
     chip.addEventListener("click", () => {
       const kind = /** @type {NodeKind} */ (chip.getAttribute("data-kind"));
-      gstate.mode = "custom";
       gstate.types[kind] = !gstate.types[kind];
+      gstate.mode = modeForTypes(gstate.types);
       refresh();
     });
   });
