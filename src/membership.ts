@@ -251,6 +251,8 @@ export interface DeleteGraphResult {
   copiesRemoved: number;
   /** Distribution rules that targeted this graph and were removed with it. */
   rulesRemoved: number;
+  /** Pending review-queue rows for this graph, dropped with it. */
+  queueRowsRemoved: number;
   index?: SyncStats;
 }
 
@@ -269,7 +271,14 @@ export async function deleteGraph(slug: string): Promise<DeleteGraphResult> {
   const members = await (await openCatalogForWrite()).filter({ graph });
   const soleMembers = sortedIds(members.filter((e) => e.graphs.length === 1));
   if (soleMembers.length > 0) {
-    return { slug: graph, deleted: false, soleMembers, copiesRemoved: 0, rulesRemoved: 0 };
+    return {
+      slug: graph,
+      deleted: false,
+      soleMembers,
+      copiesRemoved: 0,
+      rulesRemoved: 0,
+      queueRowsRemoved: 0,
+    };
   }
 
   // Drop rules that target this graph BEFORE the registry loses it, so the
@@ -285,11 +294,29 @@ export async function deleteGraph(slug: string): Promise<DeleteGraphResult> {
     // unreadable rules config — leave it for the user; deletion proceeds
   }
 
+  // Pending proposals for a graph that no longer exists are noise; the queue
+  // would reconcile them away on the next read, but dropping them here keeps
+  // the file honest and the deletion self-contained.
+  let queueRowsRemoved = 0;
+  const { purgeGraph } = await import("./graph-queue.js");
+  try {
+    queueRowsRemoved = await purgeGraph(graph);
+  } catch {
+    // unreadable queue — leave it; reconciliation drops the rows anyway
+  }
+
   const store = storeFor(graph);
   await rm(store.dir, { recursive: true, force: true });
   invalidateStoreCache();
   const index = await syncIndex(); // former copies lose a membership; rows rewrite
-  return { slug: graph, deleted: true, copiesRemoved: members.length, rulesRemoved, index };
+  return {
+    slug: graph,
+    deleted: true,
+    copiesRemoved: members.length,
+    rulesRemoved,
+    queueRowsRemoved,
+    index,
+  };
 }
 
 export interface SyncGraphsReport {

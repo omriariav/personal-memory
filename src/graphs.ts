@@ -24,7 +24,7 @@ export const GRAPHS_PARENT = "memory-graphs";
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 /** Names that can never be graph slugs (route/CLI collisions). */
-const RESERVED_SLUGS = new Set([DEFAULT_GRAPH, "private", "rules", "memory"]);
+const RESERVED_SLUGS = new Set([DEFAULT_GRAPH, "private", "rules", "memory", "queue"]);
 
 /** One physical memory store (a nested git repo of Markdown entries). */
 export interface Store {
@@ -295,6 +295,25 @@ export async function writeGraphManifest(graph: GraphId, raw: string): Promise<s
  * exempt (it is never handed over, and may reference anything). Ids missing
  * from `byId` are ignored here (existence is validated separately).
  */
+/**
+ * The ids `source` references that are NOT members of `graph` — the
+ * containment pre-check, phrased as a question rather than an assertion.
+ * `validateContainment` throws on these; copy/move and the review queue
+ * surface them so the user can act. One definition, so the two can never
+ * disagree about what "blocked" means.
+ */
+export function blockedRefs(
+  byId: Map<string, Pick<MemoryEntry, "graphs">>,
+  source: { follows?: string[]; sources?: string[] },
+  graph: string,
+): string[] {
+  if (graph === DEFAULT_GRAPH) return [];
+  return [...(source.follows ?? []), ...(source.sources ?? [])].filter((id) => {
+    const t = byId.get(id);
+    return t !== undefined && !t.graphs.includes(graph);
+  });
+}
+
 export function validateContainment(
   byId: Map<string, Pick<MemoryEntry, "graphs">>,
   source: { id: string; graphs: string[] },
