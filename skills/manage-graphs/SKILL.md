@@ -47,18 +47,22 @@ GRAPH.md manifests, and maintain the rules table with a backfill preview.
 Rules live at `memory/graphs/rules.json` (private store; editable by hand or
 via the UI): `{"version": 1, "rules": [{"match": {"tag": "…"} | {"type": "…"},
 "graph": "<slug>", "mode": "copy" | "move"}]}`. Match keys AND together.
-A saved rule is the user's **standing approval**: it auto-applies to every
-fresh capture and can be backfilled with `rules apply`. Still:
+A saved rule **proposes; it does not publish**. A match puts the entry in
+that graph's review queue, and the user approves it there (`/promote`, or the
+Manage Graphs → review queue tab). `mode` becomes the row's proposed action.
+Never tell the user a rule will share anything on its own.
 
-- **Always dry-run first** when backfilling (`rules apply --dry-run`), show
-  the user the plan (what would be copied/moved where), and get a go-ahead
-  before the confirmed run — a rule can match more history than expected.
-- Prefer `mode: copy` (the default-graph home is preserved). `move` rules
-  relocate entries out of the default graph — make sure the user really wants that.
+- `rules apply` backfills into the queue. Dry-run first anyway and show the
+  plan — a rule can match far more history than expected, and a hundred
+  surprise candidates is its own kind of mess.
+- Prefer `mode: copy` (the default-graph home is preserved). A `move` rule
+  proposes removing the entry from the default graph — make sure the user
+  really wants that, and note that a move can never carry a redaction, since
+  there would be no private home left to diverge from.
 - Conflicting rules (two moves to different graphs, or move+copy on the same
   entry) are skipped with a warning; the user resolves by editing the rules.
-- Entries blocked by containment (they reference non-members) are reported,
-  never forced — copy the referenced entries first.
+- Entries that reference non-members still queue, with their blockers shown;
+  the user resolves the order at review time.
 
 ## Manifests & consistency
 
@@ -78,8 +82,10 @@ fresh capture and can be backfilled with `rules apply`. Still:
 
 ## Principles
 
-- Graph membership changes go ONLY through `copy` / `move` / `rules apply` —
-  never by relocating files (MEMORY-GUARDRAILS.md applies to every store).
+- Graph membership changes go ONLY through `queue approve` (the reviewed
+  path) or `copy` / `move` — never by relocating files, and never by editing
+  `memory/graphs/queue.json`, whose rows carry content hashes that must match
+  the store (MEMORY-GUARDRAILS.md applies to every store).
 - Backfills and rule changes are shown to the user before a confirmed apply.
 - A shared store handed to its audience must leak nothing: the CLI enforces
   self-containment; treat any `graphs sync` violation report as a to-fix,

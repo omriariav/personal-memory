@@ -80,6 +80,8 @@ is_protected_path() {
     *memory-public/entries/*|memory-public/entries/*|./memory-public/entries/*) return 0 ;;
     *memory-graphs/*/entries/*|memory-graphs/*/entries/*|./memory-graphs/*/entries/*) return 0 ;;
     *.index/*|.index/*|./.index/*) return 0 ;;
+    # the review queue: rows carry content hashes that must match the store
+    *memory/graphs/queue.json|memory/graphs/queue.json|./memory/graphs/queue.json) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -109,7 +111,7 @@ case "$tool" in
       *cli.ts\ add*|*src/cli.ts\ remove*) exit 0 ;;
     esac
     case "$command" in
-      *memory/entries*|*memory-public/entries*|*memory-graphs/*/entries*|*.index/*|*.index*)
+      *memory/entries*|*memory-public/entries*|*memory-graphs/*/entries*|*.index/*|*.index*|*memory/graphs/queue.json*)
         case "$command" in
           *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'perl -pi'*|*'touch '*|*'truncate '*|*'dd '*|*'install '*|*'python '*|*'node '*) deny ;;
         esac

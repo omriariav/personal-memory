@@ -70,6 +70,19 @@ write_file_case() {
     "$(jq -nc --arg f "$file" '{tool_name:"Write",tool_input:{file_path:$f}}')"
 }
 
+echo "== write guard: the review queue is CLI-only, the rest of its directory is not =="
+# Config beside it stays hand-editable; the queue does not, because its rows
+# carry content hashes that have to match the store. A hand-written row is
+# either ignored or acted on against wording the entry no longer has.
+write_file_case deny "/repo/memory/graphs/queue.json"
+write_file_case deny "memory/graphs/queue.json"
+write_file_case allow "/repo/memory/graphs/rules.json"
+write_file_case allow "/repo/memory-graphs/team-x/GRAPH.md"
+write_bash_case deny "printf x > memory/graphs/queue.json"
+write_bash_case deny "sed -i '' s/a/b/ memory/graphs/queue.json"
+write_bash_case allow "cat memory/graphs/queue.json"
+write_bash_case allow "npx tsx src/cli.ts queue approve 2026-01-01-x --graph team-x"
+
 echo "== search guard: shell hand-search must be denied =="
 # The exact shape of the incident this guard exists to prevent.
 bash_case deny 'grep -rli "jane doe" memory/'
