@@ -599,6 +599,45 @@ async function apiDismissSlugMerge(req: IncomingMessage, res: ServerResponse): P
   }
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+function isLoopbackHost(value: string | undefined): boolean {
+  if (!value) return false;
+  // `new URL` gives us host-vs-port splitting that also handles [::1]:4664.
+  try {
+    return LOOPBACK_HOSTS.has(new URL(`http://${value}`).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Guard for state-changing requests. Binding 127.0.0.1 keeps the server off
+ * the network, but it does NOT stop a page the user already has open from
+ * POSTing to it — that browser sits on the loopback interface too. A
+ * cross-origin write is never legitimate here: the only client is the UI this
+ * server itself serves. Matters most for the review queue, whose approve
+ * endpoint is the one write that publishes into a shareable store.
+ *
+ * `Origin` is absent on non-browser clients (curl, the test harness) and on
+ * some same-origin navigations, so an absent Origin passes; a present one must
+ * be loopback. `Host` must be loopback too, which is what blocks DNS
+ * rebinding — a hostile name resolving to 127.0.0.1 still arrives carrying its
+ * own Host header. Exported for unit tests.
+ */
+export function isLoopbackWrite(headers: { origin?: string; host?: string }): boolean {
+  if (!isLoopbackHost(headers.host)) return false;
+  const origin = headers.origin;
+  // "null" is what a sandboxed iframe or a file:// page sends — not same-origin.
+  if (origin === undefined || origin === "") return true;
+  if (origin === "null") return false;
+  try {
+    return LOOPBACK_HOSTS.has(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function openBrowser(url: string): void {
   const cmd =
     process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
@@ -629,6 +668,16 @@ export function startServer(opts: { port: number; open: boolean }): Promise<neve
       }
     });
     try {
+      const method = req.method ?? "GET";
+      if (method !== "GET" && method !== "HEAD" && !isLoopbackWrite(req.headers)) {
+        log("warn", "cross-origin write refused", {
+          method,
+          path: url.pathname,
+          origin: req.headers.origin,
+        });
+        sendJson(res, 403, { error: "cross-origin writes are not allowed" });
+        return;
+      }
       const asset = STATIC[url.pathname];
       if (asset) {
         const body = await readFile(join(UI_DIR, asset.file));
