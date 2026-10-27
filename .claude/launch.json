@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "memory-ui",
+      "url": "http://127.0.0.1:4664",
+      "port": 4664
+    }
+  ]
+}
