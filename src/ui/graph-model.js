@@ -83,6 +83,70 @@ export function entryGraphs(e) {
   return e.graphs ?? [e.graph === "private" ? "default" : (e.graph ?? "default")];
 }
 
+/**
+ * The store one level up: graphs as the nodes, shared membership as the links.
+ *
+ * An entry's home is the default graph and it reaches a named graph by
+ * promotion or a rule, so the usual shape is a hub with spokes — but that is
+ * data, not an assumption. A `move` leaves an entry in a named graph only
+ * (counted as `outsideDefault`), and two named graphs link directly when an
+ * entry sits in both.
+ *
+ * @param {GraphEntry[]} entries
+ * @param {{ slug: string, name?: string }[]} registry
+ * @returns {{
+ *   nodes: { slug: string, name: string, count: number, outsideDefault: number }[],
+ *   links: { a: string, b: string, shared: number }[],
+ * }}
+ */
+export function graphRelations(entries, registry) {
+  const known = new Set(registry.map((g) => g.slug));
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  /** @type {Map<string, number>} */
+  const outside = new Map();
+  /** @type {Map<string, number>} */
+  const pairs = new Map();
+
+  for (const e of entries) {
+    const members = entryGraphs(e).filter((slug) => known.has(slug));
+    const inDefault = members.includes("default");
+    for (const slug of members) {
+      counts.set(slug, (counts.get(slug) ?? 0) + 1);
+      if (!inDefault && slug !== "default") outside.set(slug, (outside.get(slug) ?? 0) + 1);
+    }
+    // every unordered pair the entry is a member of, keyed low|high so the
+    // link is the same whichever order the memberships happen to be in
+    const sorted = [...members].sort();
+    for (let i = 0; i < sorted.length; i++) {
+      for (let j = i + 1; j < sorted.length; j++) {
+        const key = `${sorted[i]}|${sorted[j]}`;
+        pairs.set(key, (pairs.get(key) ?? 0) + 1);
+      }
+    }
+  }
+
+  const nodes = registry
+    .map((g) => ({
+      slug: g.slug,
+      name: g.name ?? g.slug,
+      count: counts.get(g.slug) ?? 0,
+      outsideDefault: outside.get(g.slug) ?? 0,
+    }))
+    .sort((a, b) =>
+      a.slug === "default" ? -1 : b.slug === "default" ? 1 : b.count - a.count || a.name.localeCompare(b.name),
+    );
+
+  const links = [...pairs.entries()]
+    .map(([key, shared]) => {
+      const [a = "", b = ""] = key.split("|");
+      return { a, b, shared };
+    })
+    .sort((x, y) => y.shared - x.shared || x.a.localeCompare(y.a) || x.b.localeCompare(y.b));
+
+  return { nodes, links };
+}
+
 /** @param {Exclude<GraphMode, "custom">} mode @returns {Record<NodeKind, boolean>} */
 export function presetTypes(mode) {
   if (mode === "topics") return { person: false, tag: true, team: false, entry: false };

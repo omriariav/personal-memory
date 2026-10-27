@@ -33,6 +33,7 @@ const STATIC: Record<string, { file: string; mime: string }> = {
   "/graph.js": { file: "graph.js", mime: "text/javascript; charset=utf-8" },
   "/graph-model.js": { file: "graph-model.js", mime: "text/javascript; charset=utf-8" },
   "/graph-sim.js": { file: "graph-sim.js", mime: "text/javascript; charset=utf-8" },
+  "/graphs-map.js": { file: "graphs-map.js", mime: "text/javascript; charset=utf-8" },
   "/combobox.js": { file: "combobox.js", mime: "text/javascript; charset=utf-8" },
   "/style.css": { file: "style.css", mime: "text/css; charset=utf-8" },
 };

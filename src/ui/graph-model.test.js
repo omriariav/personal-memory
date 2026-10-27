@@ -4,6 +4,7 @@ import {
   buildGraph,
   defaultMode,
   entryGraphs,
+  graphRelations,
   labelSet,
   MIN_TAG_DEGREE,
   modeForTypes,
@@ -207,6 +208,57 @@ test("presetTypes and modeLabel agree with the three mode buttons", () => {
   assert.deepEqual(presetTypes("topics"), { person: false, tag: true, team: false, entry: false });
   assert.deepEqual(presetTypes("entries"), { person: true, tag: false, team: false, entry: true });
   assert.equal(modeLabel("custom"), "custom");
+});
+
+// ---------- graphRelations ----------
+
+/** @param {string} slug @param {string} [name] */
+const reg = (slug, name) => ({ slug, name: name ?? slug, entryCount: 0 });
+
+test("graphRelations counts each graph's entries and the overlap between pairs", () => {
+  const entries = [
+    entry({ id: "a", graphs: ["default"] }),
+    entry({ id: "b", graphs: ["default", "team"] }),
+    entry({ id: "c", graphs: ["default", "team"] }),
+    entry({ id: "d", graphs: ["default", "ops"] }),
+    entry({ id: "e", graphs: ["default", "team", "ops"] }),
+  ];
+  const { nodes, links } = graphRelations(entries, [reg("default"), reg("team"), reg("ops")]);
+  assert.deepEqual(
+    nodes.map((n) => [n.slug, n.count]),
+    [["default", 5], ["team", 3], ["ops", 2]],
+    "default leads, then by size",
+  );
+  /** @param {string} a @param {string} b */
+  const shared = (a, b) => links.find((l) => (l.a === a && l.b === b) || (l.a === b && l.b === a))?.shared;
+  assert.equal(shared("default", "team"), 3);
+  assert.equal(shared("default", "ops"), 2);
+  assert.equal(shared("team", "ops"), 1, "shared graphs link to each other through the entry in both");
+});
+
+test("graphRelations reports members that left the default graph", () => {
+  const entries = [
+    entry({ id: "a", graphs: ["default", "team"] }),
+    entry({ id: "b", graphs: ["team"] }), // moved out of default
+  ];
+  const { nodes, links } = graphRelations(entries, [reg("default"), reg("team")]);
+  assert.equal(nodes.find((n) => n.slug === "team")?.count, 2);
+  assert.equal(nodes.find((n) => n.slug === "team")?.outsideDefault, 1);
+  assert.equal(links[0]?.shared, 1, "only the entry in both graphs links them");
+});
+
+test("graphRelations ignores memberships with no registry entry, and graphs with none", () => {
+  const entries = [entry({ id: "a", graphs: ["default", "ghost-graph"] })];
+  const { nodes, links } = graphRelations(entries, [reg("default"), reg("empty")]);
+  assert.deepEqual(nodes.map((n) => n.slug), ["default", "empty"]);
+  assert.equal(nodes.find((n) => n.slug === "empty")?.count, 0);
+  assert.deepEqual(links, [], "no link is invented for a graph nothing is in");
+});
+
+test("graphRelations tolerates the pre-multigraph entry shape", () => {
+  const entries = [entry({ id: "a", graph: "private" }), entry({ id: "b" })];
+  const { nodes } = graphRelations(entries, [reg("default")]);
+  assert.equal(nodes[0]?.count, 2, "both legacy shapes resolve to the default graph");
 });
 
 test("the one-off tag floor holds whichever other kinds are switched on", () => {
