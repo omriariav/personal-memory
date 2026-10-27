@@ -27,12 +27,16 @@ to integrate and no service to sign up for — you talk to the agent you already
 have open.
 
 <p align="center">
-  <img src="docs/assets/capture-recall.gif" alt="Logging a pending decision, recalling an earlier one, and listing what is still open" width="900">
+  <img src="docs/assets/ask-claude.gif" alt="A Claude Code session answering a question about a past decision, citing the memory entries it read" width="900">
 </p>
 
-Look at the second result. The question *"Kafka or RabbitMQ?"* was settled in
-April, and recall says so — `⤷ superseded by`, `status: resolved by` — instead
-of handing back a seven-month-old snapshot as if it were current.
+That is the whole interface. You ask in plain language, the agent loads the
+recall skill, runs the retrieval and answers from dated entries it cites.
+
+Notice what it does with the question. That decision was settled in April and
+then re-opened and settled again in October, and the record knows — so the
+answer is the current state, with the history attached, rather than whichever
+note happened to match the words you used.
 
 ## Private by default
 
@@ -71,16 +75,17 @@ else. The 1:1s, the hiring debriefs and the feedback stay at home unless you
 say otherwise.
 
 And a shared graph is **self-contained** — an entry in it may only reference
-fellow members. That's enforced on write, not left to discipline:
+fellow members. That is enforced on write, not left to discipline:
 
 <p align="center">
-  <img src="docs/assets/private-to-shared.gif" alt="Creating a graph, reviewing candidates, containment refusing an entry whose chain would dangle, and recall scoped to the shared graph" width="900">
+  <img src="docs/assets/share-with-claude.gif" alt="A Claude Code session creating a shared graph, copying a decision chain into it, and confirming the private entries were left out" width="900">
 </p>
 
-The decision is refused until its pending-decision comes too, because a dangling
-reference out of a shared graph is exactly the kind of leak you cannot see by
-reading the files. At the end, asking that graph about a private 1:1 returns
-work artifacts and nothing else — the entry simply isn't in there.
+A decision that settles an earlier pending-decision cannot go alone — the CLI
+refuses it until its predecessor is a member too, because a reference pointing
+out of a shared graph is exactly the kind of leak you cannot spot by reading the
+files. The session ends by naming what stayed behind: the 1:1, the hiring
+debrief, the feedback.
 
 You hand the directory over yourself: push its repo, or copy it. There is no
 sync service in the middle, which is the point.
@@ -93,13 +98,11 @@ Requires Node.js 20 or newer.
 git clone https://github.com/vladimanaev/personal-memory.git
 cd personal-memory
 npm install
-npm run index
-npm start
+claude          # or codex, or whichever agent you use
 ```
 
-`npm start` opens the UI at `http://127.0.0.1:4664`. It will be empty — it's a
-record browser, not a welcome wizard. Fill it by opening the folder in your
-agent and talking:
+There is no server to start and no commands to learn. Open the folder in your
+agent and talk to it — the repo's own instructions teach it the rest:
 
 ```text
 "Log this 1:1 with Jane: promotion readiness, scope gaps, a follow-up for Friday."
@@ -110,36 +113,25 @@ agent and talking:
 "Help me prep for my next 1:1 with Jane."
 ```
 
+A local UI is there for when you would rather read the record than ask it
+questions — `npm start`, then `http://127.0.0.1:4664` — but nothing requires it.
+
+### Or let it fill itself
+
+Capture doesn't have to be something you remember to do. Connectors read Gmail,
+Slack and Google Chat, and a scheduled routine can sweep them on an interval —
+Claude Code's `/loop` or a scheduled task, Codex's equivalent, or plain `cron`:
+
+```text
+"Every 4 hours, pull Gmail and Slack and log anything memory-worthy."
+```
+
+Entries dedupe on source ids, so re-reading the same thread updates one entry
+instead of piling up copies. Entirely optional: the store works the same if you
+only ever talk to it directly.
+
 Full setup, the plugin install that makes this work from *other* repos, and
-connector pulls from Gmail and Slack: **[docs/install.md](docs/install.md)**.
-
-## What else is different
-
-**It tells you what's still true.** Entries link into chains — a note becomes a
-pending decision becomes a decision — and recall annotates stale members instead
-of ranking them like everything else. Open items report whether they were
-resolved and by what.
-
-<p align="center">
-  <img src="docs/assets/ui-chain.png" alt="Entry detail showing a timeline from pending-decision to decision" width="900">
-</p>
-
-**The agent is the interface.** No SDK, no client library, no integration code.
-Repo-level instructions and skills teach the agent when to capture and when to
-recall, and guardrail hooks make the correct path the only path — agents can't
-grep the store or hand-write entries, which is what makes recall trustworthy
-rather than best-effort.
-
-**Retrieval is hybrid, not just vectors.** Local embeddings, persistent BM25,
-reciprocal rank fusion, metadata prefilters, query expansion, and an optional
-local cross-encoder rerank.
-
-**There's a UI for reading.** Browse, search, filter by person, team, tag, type
-and date, inspect the graph, and edit connector and source config.
-
-<p align="center">
-  <img src="docs/assets/ui-record.png" alt="The record screen with filters, type histogram and per-person counts" width="900">
-</p>
+connector configuration: **[docs/install.md](docs/install.md)**.
 
 ## Documentation
 

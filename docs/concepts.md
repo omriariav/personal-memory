@@ -125,6 +125,8 @@ read time, so there is nothing to keep in sync:
 - The UI shows each chained entry's full timeline in its detail panel, and the
   graph view draws chains as dashed edges.
 
+![Entry detail showing a timeline from pending-decision to the decision that settled it](assets/ui-chain.png)
+
 The practical effect: an old snapshot cannot masquerade as the current state.
 
 ## Retrieval

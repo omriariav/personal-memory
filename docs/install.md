@@ -6,13 +6,31 @@ Requires Node.js 20 or newer.
 git clone https://github.com/vladimanaev/personal-memory.git
 cd personal-memory
 npm install
-npm run index
+```
+
+That is the whole install. There is no server to run and no CLI to learn —
+open the folder in your agent and start talking. The agent reads the repo
+instructions, uses the memory skills, and calls the CLI behind the scenes.
+
+```bash
+claude
+```
+
+Or open the folder as the workspace in Codex.
+
+## The UI (optional)
+
+When you would rather read the record than ask it questions:
+
+```bash
 npm start
 ```
 
-`npm start` opens the local UI at `http://127.0.0.1:4664`. On a fresh clone the
-store is empty — the UI is a record browser, not an onboarding wizard, so it
-will look bare until you capture something.
+That opens the local UI at `http://127.0.0.1:4664`. On a fresh clone it is
+empty — a record browser, not an onboarding wizard, so it looks bare until you
+capture something.
+
+![The record screen with filters, a type histogram and per-person counts](assets/ui-record.png)
 
 ## Running the UI from anywhere
 
@@ -26,19 +44,6 @@ memui status     # or: start | stop | restart | open | logs | home
 
 The server runs in the background with logs in `~/.cache/memui/`. `MEMORY_HOME`
 picks the store and `MEMUI_PORT` the port.
-
-## Using it with an agent
-
-Open Claude Code or Codex with the repository as the working directory and ask
-naturally. The agent reads the repo instructions, uses the memory skills, and
-calls the CLI behind the scenes.
-
-```bash
-cd personal-memory
-claude
-```
-
-Or open the folder as the workspace in Codex.
 
 ## Using it from any other project
 
