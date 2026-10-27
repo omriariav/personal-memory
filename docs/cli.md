@@ -25,9 +25,10 @@ email updates that entry in place instead of creating a second one. Without a
 source id a near-duplicate guard catches repeats; resolve it with `--update
 <id>` (same event) or `--force-new` (genuinely different).
 
-`--graph` files a new entry directly into a named graph. It is reserved for an
-explicit request — captures otherwise land in the default graph and reach
-shared graphs through rules or promotion. See [concepts](concepts.md#graphs).
+`--graph` files a new entry into a named graph **and nowhere else** — it leaves
+no copy in the default graph. It is reserved for an explicit request; captures
+otherwise land in the default graph and gain shared memberships through rules or
+promotion, which keep the home copy. See [concepts](concepts.md#graphs).
 
 Entry types:
 

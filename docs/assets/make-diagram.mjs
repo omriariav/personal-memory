@@ -46,7 +46,7 @@ const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 /** One rounded panel with a heading, a caption and a run of entry chips. */
 function panel(c, { x, y, w, h, title, caption, chips, footer, accent }) {
-  const chipW = 150;
+  const chipW = (w - 54) / 2;
   const chipH = 28;
   const gap = 10;
   const perRow = 2;
@@ -74,26 +74,56 @@ function panel(c, { x, y, w, h, title, caption, chips, footer, accent }) {
   <text x="${x + 22}" y="${y + h - 18}" font-family="${FONT}" font-size="12.5" fill="${c.inkSecondary}">${footer}</text>`;
 }
 
-function arrow(c, { x1, x2, y, label, sub }) {
-  const mid = (x1 + x2) / 2;
+function arrow(c, { x1, x2, y, color }) {
+  const stroke = color || c.accent;
   return `
-  <line x1="${x1}" y1="${y}" x2="${x2 - 10}" y2="${y}" stroke="${c.accent}" stroke-width="2"/>
-  <path d="M ${x2 - 10} ${y - 5} L ${x2} ${y} L ${x2 - 10} ${y + 5} Z" fill="${c.accent}"/>
-  <text x="${mid}" y="${y - 16}" text-anchor="middle" font-family="${FONT}" font-size="13"
-        font-weight="600" fill="${c.accentText}">${label}</text>
-  <text x="${mid}" y="${y + 26}" text-anchor="middle" font-family="${FONT}" font-size="12"
+  <line x1="${x1}" y1="${y}" x2="${x2 - 10}" y2="${y}" stroke="${stroke}" stroke-width="2"/>
+  <path d="M ${x2 - 10} ${y - 5} L ${x2} ${y} L ${x2 - 10} ${y + 5} Z" fill="${stroke}"/>`;
+}
+
+/** A route label: bold lead-in, muted qualifier, centred on x. */
+function route(c, { x, y, label, sub }) {
+  return `
+  <text x="${x}" y="${y}" text-anchor="middle" font-family="${FONT}" font-size="12.5"
+        font-weight="650" fill="${c.accentText}">${label}</text>
+  <text x="${x}" y="${y + 16}" text-anchor="middle" font-family="${FONT}" font-size="12"
         fill="${c.muted}">${sub}</text>`;
 }
 
 function diagram(c) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img"
-     aria-label="Every capture lands in the default graph on your disk. Entries you promote are copied into a named shared graph that cannot reference anything you did not promote, and the person you share it with recalls from that graph alone.">
-  <rect width="1280" height="420" fill="${c.bg}"/>
+  const W = 1380;
+  const H = 510;
+  const mid = 262;              // vertical centre of the two panels
+  const panelY = 112;
+  const panelH = 300;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
+     aria-label="A capture lands in the default graph on your disk unless you explicitly ask for a named graph, in which case it is written only there. Entries reach a named shared graph by a standing rule or by a promotion review you confirm entry by entry. A shared graph cannot reference anything that is not in it, and the person you share it with recalls from that graph alone.">
+  <rect width="${W}" height="${H}" fill="${c.bg}"/>
+
+  <text x="30" y="34" font-family="${FONT}" font-size="14" fill="${c.inkSecondary}">
+    <tspan font-weight="650" fill="${c.ink}">Private by default.</tspan>
+    <tspan fill="${c.muted}">  A capture lands at home unless you say otherwise; sharing is a separate, deliberate act.</tspan>
+  </text>
+
+  <!-- the exception, drawn as one: an explicit request writes straight into the named graph -->
+  <path d="M 77 ${mid - 28} L 77 72 L 845 72 L 845 ${panelY - 10}"
+        fill="none" stroke="${c.muted}" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <path d="M 840 ${panelY - 20} L 845 ${panelY - 8} L 850 ${panelY - 20} Z" fill="${c.muted}"/>
+  <text x="461" y="64" text-anchor="middle" font-family="${FONT}" font-size="12.5" fill="${c.muted}">
+    only if you ask for it — <tspan font-family="ui-monospace, monospace" font-size="12">add --graph &lt;name&gt;</tspan> writes there and nowhere else
+  </text>
+
+  <rect x="24" y="${mid - 28}" width="106" height="56" rx="10" fill="${c.surfaceAlt}" stroke="${c.grid}"/>
+  <text x="77" y="${mid + 5}" text-anchor="middle" font-family="${FONT}" font-size="14"
+        font-weight="650" fill="${c.ink}">a capture</text>
+
+  ${arrow(c, { x1: 132, x2: 150, y: mid })}
 
   ${panel(c, {
-    x: 40, y: 70, w: 380, h: 290,
+    x: 150, y: panelY, w: 340, h: panelH,
     title: "default graph",
-    caption: "every capture lands here",
+    caption: "where captures land",
     chips: [
       { label: "meeting" }, { label: "incident" },
       { label: "decision" }, { label: "note" },
@@ -103,13 +133,15 @@ function diagram(c) {
     footer: "gitignored · its own git repo · never leaves",
   })}
 
-  ${arrow(c, { x1: 440, x2: 540, y: 205, label: "you confirm", sub: "per entry" })}
+  ${route(c, { x: 590, y: mid - 46, label: "a standing rule", sub: "by tag or type, automatic" })}
+  ${arrow(c, { x1: 500, x2: 680, y: mid })}
+  ${route(c, { x: 590, y: mid + 40, label: "a promotion review", sub: "you confirm each entry" })}
 
   ${panel(c, {
-    x: 560, y: 70, w: 380, h: 290,
+    x: 690, y: panelY, w: 340, h: panelH,
     accent: true,
     title: "platform-team graph",
-    caption: "only what you promoted",
+    caption: "only what you put there",
     chips: [
       { label: "meeting" }, { label: "incident" },
       { label: "decision" }, { label: "note" },
@@ -119,22 +151,17 @@ function diagram(c) {
     footer: "self-contained · no reference points outside",
   })}
 
-  ${arrow(c, { x1: 960, x2: 1040, y: 205, label: "hand over", sub: "a directory" })}
+  ${arrow(c, { x1: 1040, x2: 1072, y: mid })}
 
-  <rect x="1060" y="130" width="180" height="170" rx="12" fill="${c.surface}" stroke="${c.grid}"/>
-  <text x="1150" y="180" text-anchor="middle" font-family="${FONT}" font-size="17" font-weight="650"
+  <rect x="1092" y="${mid - 84}" width="248" height="168" rx="12" fill="${c.surface}" stroke="${c.grid}"/>
+  <text x="1216" y="${mid - 42}" text-anchor="middle" font-family="${FONT}" font-size="17" font-weight="650"
         fill="${c.ink}" letter-spacing="-0.015em">their agent</text>
-  <text x="1150" y="208" text-anchor="middle" font-family="${FONT}" font-size="12.5" fill="${c.muted}">recalls from</text>
-  <text x="1150" y="226" text-anchor="middle" font-family="${FONT}" font-size="12.5" fill="${c.muted}">that graph alone</text>
-  <text x="1150" y="262" text-anchor="middle" font-family="${FONT}" font-size="12.5" fill="${c.green}">✓ nothing else</text>
+  <text x="1216" y="${mid - 14}" text-anchor="middle" font-family="${FONT}" font-size="12.5" fill="${c.muted}">you hand over the directory;</text>
+  <text x="1216" y="${mid + 4}" text-anchor="middle" font-family="${FONT}" font-size="12.5" fill="${c.muted}">they recall from that graph alone</text>
+  <text x="1216" y="${mid + 44}" text-anchor="middle" font-family="${FONT}" font-size="12.5" fill="${c.green}">✓ nothing else is reachable</text>
 
-  <text x="40" y="40" font-family="${FONT}" font-size="14" fill="${c.inkSecondary}">
-    <tspan font-weight="650" fill="${c.ink}">Private by default.</tspan>
-    <tspan fill="${c.muted}">  Capture always lands at home; sharing is a separate, deliberate act.</tspan>
-  </text>
-
-  <text x="40" y="395" font-family="${FONT}" font-size="12.5" fill="${c.muted}">
-    ✕ marks what was never promoted — a shared graph is a separate directory on disk, not a filtered view of this one.
+  <text x="30" y="${H - 28}" font-family="${FONT}" font-size="12.5" fill="${c.muted}">
+    ✕ marks what was never shared — a named graph is a separate directory on disk, not a filtered view of the default one.
   </text>
 </svg>
 `;

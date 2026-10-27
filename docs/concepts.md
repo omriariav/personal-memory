@@ -64,8 +64,8 @@ default graph always the home.
 
 ![The Manage Graphs screen listing the default graph and one named shared graph, with distribution rules below](assets/ui-graphs.png)
 
-**Capture always lands in the default graph.** Entries reach a shared graph
-three ways:
+**A capture lands in the default graph unless you explicitly name another one.**
+Entries reach a shared graph three ways:
 
 1. **Standing distribution rules** — per tag or per type, configured in the
    UI's Graphs screen, previewed with `memory rules apply --dry-run`, and
@@ -74,7 +74,16 @@ three ways:
    unreviewed entries; the agent judges each against the graph's `GRAPH.md`
    criteria, you confirm one at a time, and `memory copy <id> --to <graph>`
    executes. Declines are recorded with `memory promote dismiss`.
-3. **An explicit request** — "log this to the platform-team graph".
+3. **An explicit request** — "log this to the platform-team graph", which runs
+   `memory add --graph platform-team`.
+
+Route 3 is worth understanding precisely, because it is the one that bypasses
+the default graph: `add --graph <name>` writes the entry into that graph **and
+nowhere else**. It does not leave a copy at home, and `memory list --graph
+default` will not show it. That is why the agent instructions reserve `--graph`
+for an explicit request and route everything else through rules or promotion —
+routes 1 and 2 both *add* a membership to an entry that already lives in the
+default graph, so the home copy always remains.
 
 ### Containment
 

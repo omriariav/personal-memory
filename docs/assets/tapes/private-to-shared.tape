@@ -7,9 +7,9 @@ Output docs/assets/private-to-shared.gif
 Set Shell "bash"
 Set FontSize 15
 Set Width 1420
-Set Height 820
+Set Height 470
 Set Padding 24
-Set TypingSpeed 28ms
+Set TypingSpeed 12ms
 Set Theme { "name": "paper", "background": "#f9f9f7", "foreground": "#0b0b0b", "cursor": "#2a78d6", "selection": "#cde2fb", "black": "#0b0b0b", "red": "#8a2b00", "green": "#006300", "yellow": "#8a5a00", "blue": "#1c60b4", "magenta": "#6e3fa3", "cyan": "#1c7b86", "white": "#52514e", "brightBlack": "#6e6d66", "brightRed": "#8a2b00", "brightGreen": "#006300", "brightYellow": "#8a5a00", "brightBlue": "#2a78d6", "brightMagenta": "#6e3fa3", "brightCyan": "#1c7b86", "brightWhite": "#0b0b0b" }
 
 Hide

@@ -64,9 +64,11 @@ it. It's knowing that what you send doesn't leak what you didn't.
 </p>
 
 A **named graph** is a physically separate directory with its own git repo.
-Entries reach one only by your decision: a standing rule for a tag or type, or a
-promotion review where you confirm entries one at a time. The 1:1s, the hiring
-debriefs and the feedback stay at home unless you say otherwise.
+Entries reach one only by your decision — a standing rule for a tag or type, a
+promotion review where you confirm entries one at a time, or asking outright
+("log this to the platform-team graph"), which writes it there and nowhere
+else. The 1:1s, the hiring debriefs and the feedback stay at home unless you
+say otherwise.
 
 And a shared graph is **self-contained** — an entry in it may only reference
 fellow members. That's enforced on write, not left to discipline:
