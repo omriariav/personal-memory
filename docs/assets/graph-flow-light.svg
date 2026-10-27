@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1380" height="510" viewBox="0 0 1380 510" role="img"
+     aria-label="A capture lands in the default graph on your disk unless you explicitly ask for a named graph, in which case it is written only there. Entries reach a named shared graph by a standing rule or by a promotion review you confirm entry by entry. A shared graph cannot reference anything that is not in it, and the person you share it with recalls from that graph alone.">
+  <rect width="1380" height="510" fill="#f9f9f7"/>
+
+  <text x="30" y="34" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" fill="#52514e">
+    <tspan font-weight="650" fill="#0b0b0b">Private by default.</tspan>
+    <tspan fill="#6e6d66">  A capture lands at home unless you say otherwise; sharing is a separate, deliberate act.</tspan>
+  </text>
+
+  <!-- the exception, drawn as one: an explicit request writes straight into the named graph -->
+  <path d="M 77 234 L 77 72 L 845 72 L 845 102"
+        fill="none" stroke="#6e6d66" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <path d="M 840 92 L 845 104 L 850 92 Z" fill="#6e6d66"/>
+  <text x="461" y="64" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5" fill="#6e6d66">
+    only if you ask for it — <tspan font-family="ui-monospace, monospace" font-size="12">add --graph &lt;name&gt;</tspan> writes there and nowhere else
+  </text>
+
+  <rect x="24" y="234" width="106" height="56" rx="10" fill="#f0f0ed" stroke="#e1e0d9"/>
+  <text x="77" y="267" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14"
+        font-weight="650" fill="#0b0b0b">a capture</text>
+
+  
+  <line x1="132" y1="262" x2="140" y2="262" stroke="#2a78d6" stroke-width="2"/>
+  <path d="M 140 257 L 150 262 L 140 267 Z" fill="#2a78d6"/>
+
+  
+  <rect x="150" y="112" width="340" height="300" rx="12"
+        fill="#fcfcfb" stroke="#e1e0d9" stroke-width="1"/>
+  <text x="172" y="146" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="17" font-weight="650"
+        fill="#0b0b0b" letter-spacing="-0.015em">default graph</text>
+  <text x="172" y="170" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13" fill="#6e6d66">where captures land</text>
+  
+    <rect x="172" y="198" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="184" y="217" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">meeting</text>
+    <rect x="325" y="198" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="337" y="217" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">incident</text>
+    <rect x="172" y="236" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="184" y="255" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">decision</text>
+    <rect x="325" y="236" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="337" y="255" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">note</text>
+    <rect x="172" y="274" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="184" y="293" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">1:1</text>
+    <rect x="325" y="274" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="337" y="293" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">hiring</text>
+    <rect x="172" y="312" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="184" y="331" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">feedback</text>
+    <rect x="325" y="312" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="337" y="331" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">achievement</text>
+  <text x="172" y="394" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5" fill="#52514e">gitignored · its own git repo · never leaves</text>
+
+  
+  <text x="590" y="216" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5"
+        font-weight="650" fill="#1c60b4">a standing rule</text>
+  <text x="590" y="232" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12"
+        fill="#6e6d66">by tag or type, automatic</text>
+  
+  <line x1="500" y1="262" x2="670" y2="262" stroke="#2a78d6" stroke-width="2"/>
+  <path d="M 670 257 L 680 262 L 670 267 Z" fill="#2a78d6"/>
+  
+  <text x="590" y="302" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5"
+        font-weight="650" fill="#1c60b4">a promotion review</text>
+  <text x="590" y="318" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12"
+        fill="#6e6d66">you confirm each entry</text>
+
+  
+  <rect x="690" y="112" width="340" height="300" rx="12"
+        fill="#fcfcfb" stroke="#2a78d6" stroke-width="2"/>
+  <text x="712" y="146" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="17" font-weight="650"
+        fill="#0b0b0b" letter-spacing="-0.015em">platform-team graph</text>
+  <text x="712" y="170" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13" fill="#6e6d66">only what you put there</text>
+  
+    <rect x="712" y="198" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="724" y="217" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">meeting</text>
+    <rect x="865" y="198" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="877" y="217" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">incident</text>
+    <rect x="712" y="236" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="724" y="255" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">decision</text>
+    <rect x="865" y="236" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="877" y="255" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">note</text>
+    <rect x="712" y="274" width="143" height="28" rx="6"
+          fill="none" stroke="#e1e0d9"
+          stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="724" y="293" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#6e6d66">✕  1:1</text>
+    <rect x="865" y="274" width="143" height="28" rx="6"
+          fill="none" stroke="#e1e0d9"
+          stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="877" y="293" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#6e6d66">✕  hiring</text>
+    <rect x="712" y="312" width="143" height="28" rx="6"
+          fill="none" stroke="#e1e0d9"
+          stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="724" y="331" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#6e6d66">✕  feedback</text>
+    <rect x="865" y="312" width="143" height="28" rx="6"
+          fill="#f0f0ed" stroke="none"
+          stroke-width="1" />
+    <text x="877" y="331" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13"
+          fill="#52514e">achievement</text>
+  <text x="712" y="394" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5" fill="#52514e">self-contained · no reference points outside</text>
+
+  
+  <line x1="1040" y1="262" x2="1062" y2="262" stroke="#2a78d6" stroke-width="2"/>
+  <path d="M 1062 257 L 1072 262 L 1062 267 Z" fill="#2a78d6"/>
+
+  <rect x="1092" y="178" width="248" height="168" rx="12" fill="#fcfcfb" stroke="#e1e0d9"/>
+  <text x="1216" y="220" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="17" font-weight="650"
+        fill="#0b0b0b" letter-spacing="-0.015em">their agent</text>
+  <text x="1216" y="248" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5" fill="#6e6d66">you hand over the directory;</text>
+  <text x="1216" y="266" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5" fill="#6e6d66">they recall from that graph alone</text>
+  <text x="1216" y="306" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5" fill="#006300">✓ nothing else is reachable</text>
+
+  <text x="30" y="482" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5" fill="#6e6d66">
+    ✕ marks what was never shared — a named graph is a separate directory on disk, not a filtered view of the default one.
+  </text>
+</svg>
