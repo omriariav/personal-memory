@@ -113,7 +113,7 @@ case "$tool" in
     case "$command" in
       *memory/entries*|*memory-public/entries*|*memory-graphs/*/entries*|*.index/*|*.index*|*memory/graphs/queue.json*)
         case "$command" in
-          *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'perl -pi'*|*'touch '*|*'truncate '*|*'dd '*|*'install '*|*'python '*|*'node '*) deny ;;
+          *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'perl -pi'*|*'touch '*|*'truncate '*|*'dd '*|*'install '*|*'python '*|*'python3 '*|*'node '*) deny ;;
         esac
         ;;
     esac

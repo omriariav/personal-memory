@@ -63,12 +63,34 @@ write_bash_case() {
     "$(jq -nc --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}')"
 }
 
+# both_write_bash_case <deny|allow> <command>
+# The .claude and .codex guards have drifted before, and a verb present in one
+# but not the other means the same command is blocked under Codex and allowed
+# under Claude Code. Assert them together so they cannot diverge silently.
+both_write_bash_case() {
+  local want="$1" cmd="$2" g
+  for g in "$repo_root/.claude/hooks/guard-memory-write.sh" "$repo_root/.codex/hooks/guard-memory-write.sh"; do
+    expect "$want" "$g" "both[$(basename "$(dirname "$(dirname "$g")")")]: $cmd" \
+      "$(jq -nc --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}')"
+  done
+}
+
 # write_file_case <deny|allow> <file_path>
 write_file_case() {
   local want="$1" file="$2"
   expect "$want" "$write_guard" "write/edit: $file" \
     "$(jq -nc --arg f "$file" '{tool_name:"Write",tool_input:{file_path:$f}}')"
 }
+
+echo "== write guards: an interpreter is a write verb, in BOTH harnesses =="
+# node -e "...writeFileSync..." was denied under Codex and ALLOWED under
+# Claude Code — the primary harness — because the verb lists had drifted.
+both_write_bash_case deny "node -e \"require('fs').writeFileSync('memory/entries/2026/01/x.md','x')\""
+both_write_bash_case deny "python3 -c \"open('memory/entries/2026/01/x.md','w').write('x')\""
+both_write_bash_case deny "perl -pi -e s/a/b/ memory/entries/2026/01/x.md"
+both_write_bash_case deny "node -e \"require('fs').writeFileSync('memory/graphs/queue.json','[]')\""
+both_write_bash_case allow "node -e \"console.log(1)\""
+both_write_bash_case allow "npx tsx src/cli.ts queue list --graph team-x"
 
 echo "== write guard: the review queue is CLI-only, the rest of its directory is not =="
 # Config beside it stays hand-editable; the queue does not, because its rows

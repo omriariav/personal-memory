@@ -82,14 +82,14 @@ case "$tool" in
     case "$cmd" in
       *memory/entries*|*memory-public/entries*|*memory-graphs/*/entries*|*.index/*|*memory/eval/*)
         case "$cmd" in
-          *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'touch '*|*'truncate '*|*'dd '*) deny ;;
+          *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'perl -pi'*|*'touch '*|*'truncate '*|*'dd '*|*'install '*|*'python '*|*'python3 '*|*'node '*) deny ;;
         esac
         ;;
     esac
     case "$cmd" in
       *memory/graphs/queue.json*)
         case "$cmd" in
-          *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'touch '*|*'truncate '*|*'dd '*) deny_queue ;;
+          *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'perl -pi'*|*'touch '*|*'truncate '*|*'dd '*|*'install '*|*'python '*|*'python3 '*|*'node '*) deny_queue ;;
         esac
         ;;
     esac
