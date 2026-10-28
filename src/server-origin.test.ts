@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isLoopbackWrite } from "./server.js";
+import { isLoopbackRequest, isLoopbackWrite } from "./server.js";
 
 /**
  * The UI server binds 127.0.0.1, which keeps it off the network but does
@@ -44,4 +44,23 @@ test("a non-loopback Host is refused even with no Origin", () => {
 test("a malformed Origin or Host is refused rather than throwing", () => {
   assert.equal(isLoopbackWrite({ origin: "::::", host: "127.0.0.1:4664" }), false);
   assert.equal(isLoopbackWrite({ host: "::::" }), false);
+});
+
+/**
+ * Reads need the Host check too — /api/data returns the whole store. This is
+ * the anti-rebinding half, and it is the one an attacker's page can actually
+ * reach without needing a write.
+ */
+
+test("a read from a rebound hostname is refused", () => {
+  // The name resolved to 127.0.0.1, but the request still says who was dialed.
+  assert.equal(isLoopbackRequest({ host: "rebind.evil.example" }), false);
+  assert.equal(isLoopbackRequest({ host: "127.0.0.1.evil.example:4664" }), false);
+  assert.equal(isLoopbackRequest({}), false, "no Host at all is not loopback");
+});
+
+test("a read from the real loopback UI is allowed", () => {
+  for (const host of ["127.0.0.1:4664", "localhost:4664", "[::1]:4664", "127.0.0.1"]) {
+    assert.equal(isLoopbackRequest({ host }), true, host);
+  }
 });

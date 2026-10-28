@@ -143,6 +143,35 @@ test("a frontmatter-only change syncs into the variant without touching its body
   });
 });
 
+test("a slug merge rewrites a variant's frontmatter without republishing the private body", { timeout: 300_000 }, () => {
+  withStore((root) => {
+    publishVariant(root);
+    // A person/tag merge touches every copy of every affected entry. It is
+    // reachable from the CLI, the maintenance screen's Merge button, and
+    // /compact-tags — and it used to write the home's bytes over the variant,
+    // silently dropping variant_of_hash so `graphs sync` saw nothing wrong.
+    runInStore(
+      root,
+      `const g = await import(${JSON.stringify(join(REPO, "src", "graph-maintenance.ts"))});
+       console.log(JSON.stringify(await g.mergeSlugs({ kind: "person", from: "chen-mizrahi", to: "ana-levi", confirm: true })));`,
+    );
+    const after = readFileSync(sharedPath(root), "utf8");
+    assert.match(after, /ana-levi/, "the slug change propagated");
+    assert.match(after, /Hiring loop ran/, "the approved wording survived");
+    assert.doesNotMatch(after, /interviews and offers/, "the private body did NOT get republished");
+    assert.match(after, /variant_of_hash:/, "and the copy still announces itself as a variant");
+
+    // The silent part: without the marker, sync would have called this clean.
+    const report = runInStore(
+      root,
+      `const m = await import(${MEMBERSHIP});
+       console.log(JSON.stringify(await m.syncGraphs({ dryRun: true })));`,
+    ) as { drift: unknown[]; staleVariants: unknown[] };
+    assert.deepEqual(report.drift, []);
+    assert.deepEqual(report.staleVariants, [], "frontmatter-only change leaves it current");
+  });
+});
+
 test("moving an entry that has a published variant is refused", { timeout: 300_000 }, () => {
   withStore((root) => {
     publishVariant(root);

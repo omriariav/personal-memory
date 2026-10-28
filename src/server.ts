@@ -767,18 +767,31 @@ function isLoopbackHost(value: string | undefined): boolean {
 }
 
 /**
- * Guard for state-changing requests. Binding 127.0.0.1 keeps the server off
- * the network, but it does NOT stop a page the user already has open from
- * POSTing to it — that browser sits on the loopback interface too. A
- * cross-origin write is never legitimate here: the only client is the UI this
- * server itself serves. Matters most for the review queue, whose approve
- * endpoint is the one write that publishes into a shareable store.
+ * Does this request carry a loopback `Host`? Required of EVERY request, read
+ * or write, because this is the anti-DNS-rebinding control and reads are the
+ * juicier target: `/api/data` returns every entry in the store, private graph
+ * included, with full bodies.
+ *
+ * Binding 127.0.0.1 does not help here. An attacker's page rebinds its own
+ * hostname to 127.0.0.1, the browser then treats the response as same-origin
+ * with THAT hostname — so CORS never applies and the page can read the
+ * answer. What the attacker cannot do is forge the `Host` header: it still
+ * says the hostname the browser dialed. Exported for unit tests.
+ */
+export function isLoopbackRequest(headers: { host?: string }): boolean {
+  return isLoopbackHost(headers.host);
+}
+
+/**
+ * Guard for state-changing requests: loopback `Host` (above) AND a loopback
+ * `Origin` when the browser sends one. A cross-origin write is never
+ * legitimate here — the only client is the UI this server itself serves.
+ * Matters most for the review queue, whose approve endpoint is the one write
+ * that publishes into a shareable store.
  *
  * `Origin` is absent on non-browser clients (curl, the test harness) and on
  * some same-origin navigations, so an absent Origin passes; a present one must
- * be loopback. `Host` must be loopback too, which is what blocks DNS
- * rebinding — a hostile name resolving to 127.0.0.1 still arrives carrying its
- * own Host header. Exported for unit tests.
+ * be loopback. Exported for unit tests.
  */
 export function isLoopbackWrite(headers: { origin?: string; host?: string }): boolean {
   if (!isLoopbackHost(headers.host)) return false;
@@ -824,6 +837,18 @@ export function startServer(opts: { port: number; open: boolean }): Promise<neve
     });
     try {
       const method = req.method ?? "GET";
+      // Reads first: a rebound hostname can read /api/data, which is the whole
+      // private store. Nothing legitimate reaches this server under any other
+      // Host, so refuse before any handler runs.
+      if (!isLoopbackRequest(req.headers)) {
+        log("warn", "non-loopback host refused", {
+          method,
+          path: url.pathname,
+          host: req.headers.host,
+        });
+        sendJson(res, 403, { error: "this server answers only on loopback" });
+        return;
+      }
       if (method !== "GET" && method !== "HEAD" && !isLoopbackWrite(req.headers)) {
         log("warn", "cross-origin write refused", {
           method,
