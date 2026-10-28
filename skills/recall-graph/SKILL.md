@@ -54,6 +54,16 @@ check" — that is exactly the leak this skill exists to prevent.
 - **Cite only member entries.** Every claim grounds in a path inside that
   graph's store (`memory-graphs/<name>/…`). Never surface any other entry's
   content, id, title, or path in output meant for sharing.
+- **⛔ Quote the graph's FILE, not the recall snippet.** The index holds one
+  row per entry, built from the entry's private home, so a member whose
+  published copy is a **declared variant** (an approved redaction) reads back
+  through recall with the private wording the redaction removed. Recall cannot
+  tell you this. Before quoting or paraphrasing any member into shareable
+  output, open `memory-graphs/<name>/entries/…/<id>.md` and use what is
+  actually in there — if its frontmatter carries `variant_of_hash`, the body
+  you got from recall is NOT what was shared. `memory queue list --graph
+  <name>` shows nothing about this; the file is the only source of truth.
+  Same rule when writing a shared graph's digest `## Synthesis`.
 - **Superseded-by pointers can cross out of the graph** (a matter can develop
   privately after being shared). If a hit shows `⤷ superseded by: <id>` and
   that id is not a member of the target graph, treat the hit as the latest

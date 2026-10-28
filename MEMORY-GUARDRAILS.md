@@ -88,6 +88,7 @@ four things a manual write skips:
 |---|---|---|
 | `memory/entries/**` | ❌ never by hand | `cli.ts add` / `add --update <id>` / `link` / `remove` / `copy` / `move` / `slugs merge` / `rules apply` only |
 | `memory-graphs/*/entries/**` | ❌ never by hand | same CLI paths |
+| `memory-graphs/*/summaries/**` Synthesis | ⚠️ prose only | and written from that graph's OWN copies — never from recall, which returns the private body of a redacted member |
 | `memory/graphs/queue.json` | ❌ never by hand | `cli.ts queue add|approve|dismiss|sweep` only — rows carry content hashes that must match the store |
 | `memory/summaries/**`, `memory-graphs/*/summaries/**` | ✏️ only the `## Synthesis` section of a scaffold `digest` created — then run `cli.ts index` | Edit tool |
 | `memory/connectors/**` | ✅ private connector overrides | Edit tool or web UI |

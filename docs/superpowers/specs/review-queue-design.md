@@ -90,6 +90,13 @@ surfaces the private wording even where the published copy is a redaction. The
 index is local and private, so this is not a data leak — it is a *workflow*
 leak, and `skills/recall-graph` is exactly the surface it undermines.
 
+The sharpest instance is a digest: `memory digest --graph <g>` scaffolds a
+summary **into that shared store**, and an agent refines its `## Synthesis`
+afterwards. Written from recall, that prose would put the redacted wording
+back into the very store the redaction was for — a write, not just a display.
+`AGENTS.md` and the guardrails table now say to write it from the graph's own
+copies.
+
 Mitigated in instructions rather than code: `CLAUDE.md` and the skills say to
 read the graph's own copy before quoting it into shared output, and
 `MemoryEntry.variants` carries the flag needed to detect one. A derived-entry

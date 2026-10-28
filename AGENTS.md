@@ -162,7 +162,11 @@ Run with `npx tsx src/cli.ts <cmd>` (Node ≥ 20 — `nvm use 20`).
 - **Summaries:** `memory/summaries/<id>.md` (`type: summary`) — an **additive**
   compaction layer with `sources:` back-links. They augment, never replace, raw
   entries. `digest` writes a scaffold; the agent refines the `## Synthesis`
-  section into prose, then runs `index`.
+  section into prose, then runs `index`. **Refining a SHARED graph's digest:
+  write it from that graph's own copies, never from recall.** The index holds
+  one row per entry built from the private home, so a member published as a
+  declared variant reads back with the wording the redaction removed —
+  summarizing from recall would put it straight back into the shared store.
 - **Index:** `.index/` — rebuildable derivatives, gitignored, never hand-edited.
   The **root is the legacy slot**, unchanged in shape: the LanceDB `memory`
   vector table (rows carry `people`/`teams`/`tags` as pipe-delimited strings so
