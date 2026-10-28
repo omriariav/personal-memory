@@ -7,7 +7,7 @@ import { openCatalog, type CatalogEntryMeta } from "./catalog.js";
 /**
  * Promotion review state. Capture always lands in the DEFAULT graph; entries
  * reach a shared graph only through a user-confirmed promotion review
- * (`cli.ts copy|move <id> --to <graph>`, driven by the promote-graph skill)
+ * (`cli.ts queue approve <id> --graph <g>`, driven by the review-queue skill)
  * or standing rules. This module provides the mechanical half of the review:
  * the per-graph candidate list and the "user said no" memory.
  *

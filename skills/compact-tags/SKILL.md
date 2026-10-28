@@ -183,7 +183,12 @@ usually means a typo in `--to`.
 - Checkpoint before + commit after each merge in EVERY affected store
   (private and any shared graphs whose members carry the tag) = a full undo
   path per merge, per store. Entries with copies in several graphs are
-  rewritten identically in each copy, so the synced-copy invariant holds.
+  rewritten identically in each copy, so the synced-copy invariant holds —
+  except a shared copy that is a **declared variant** (an approved
+  redaction), which takes the slug change in its frontmatter and keeps its
+  own body. Rewriting it from the private home would republish the wording
+  the redaction removed, and would drop `variant_of_hash` so `graphs sync`
+  could no longer tell.
 - The index is re-synced in the same operation, so recall never sees a stale
   tag.
 

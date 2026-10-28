@@ -83,6 +83,34 @@ with `./scripts/migrate.sh`.
 - Re-running the script is always a no-op; it finishes with a consistency check
   (`memory graphs sync --dry-run`).
 
+## Distribution rules now propose instead of publishing
+
+If you have standing distribution rules, they change behaviour on this
+upgrade. A rule used to copy a matching entry into its graph at capture time.
+It now queues that entry as a candidate, and nothing reaches the shared graph
+until you approve it.
+
+Nothing already copied is touched — existing memberships stay exactly as they
+are. What changes is everything from here on:
+
+- A capture matching a rule prints `→ rule: queued …` instead of
+  `→ rule: copied …`.
+- `memory rules apply` backfills into the queue rather than copying, and its
+  `--dry-run` says "would queue".
+- `memory add --graph <name>` captures the memory in your default graph and
+  queues it for `<name>`, where before it wrote into that graph and nowhere
+  else. Entries created the old way have no private home; `memory graphs
+  sync` already reports those, and `memory move <id> --to default` brings one
+  back.
+
+Nothing is required of you. To see what is waiting:
+
+```bash
+memory queue list
+```
+
+and work through it there or on the Manage Graphs screen.
+
 ## Vocabulary changes
 
 - The home graph is now named `default` (`--graph private` is now

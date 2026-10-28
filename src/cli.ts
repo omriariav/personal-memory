@@ -6,6 +6,7 @@ import { FrontmatterSchema, type Frontmatter } from "./schema.js";
 import {
   makeId,
   writeEntry,
+  readVariants,
   writeEntryAll,
   entryPath,
   hashEntry,
@@ -222,7 +223,10 @@ async function cmdAdd(argv: string[]) {
 
   // An update keeps the entry's own membership — a re-capture must never
   // silently relocate an entry between graphs. Reclassify explicitly instead.
-  const graphs: string[] = target ? target.graphs : [requestedGraph];
+  // A NEW capture always homes in the default graph, even when a graph was
+  // named: `--graph` now queues a candidate for review rather than writing
+  // into that store, so every memory has a private home to come back to.
+  const graphs: string[] = target ? target.graphs : [DEFAULT_GRAPH];
   if (target && values.graph && !target.graphs.includes(requestedGraph)) {
     console.log(
       `↻ ${target.id} lives in [${target.graphs.join(",")}] — --graph ${requestedGraph} ignored; ` +
@@ -325,12 +329,14 @@ async function cmdAdd(argv: string[]) {
 
   let path: string;
   if (target) {
-    // Refresh EVERY materialization so the copy-sync invariant holds.
-    const written = await writeEntryAll(fm, body, graphs);
+    // Refresh EVERY materialization so the copy-sync invariant holds — except
+    // a declared variant's body, which is a user-approved redaction: it takes
+    // the new frontmatter and keeps its own words, going stale (and back into
+    // the review queue) rather than being overwritten with the private text.
+    const written = await writeEntryAll(fm, body, graphs, await readVariants(target.paths));
     path = written[DEFAULT_GRAPH] ?? Object.values(written)[0]!;
   } else {
-    if (requestedGraph !== DEFAULT_GRAPH) await ensureStore(requestedGraph);
-    path = await writeEntry(fm, body, requestedGraph);
+    path = await writeEntry(fm, body, DEFAULT_GRAPH);
   }
   const stats = await syncIndex();
   const label = sharedGraphs({ graphs }).length ? ` [${sharedGraphs({ graphs }).join(",")}]` : "";
@@ -343,13 +349,38 @@ async function cmdAdd(argv: string[]) {
   const captured = await markCapturedConnectors(capturedConnectors);
   if (captured.length) console.log(`  connector captured: ${captured.join(", ")}`);
 
-  // Standing distribution rules auto-apply to fresh private captures; a rule
-  // failure must never fail the capture itself.
-  if (!target && requestedGraph === DEFAULT_GRAPH) {
+  // An explicitly named graph is a proposal too, so it goes through the same
+  // review as everything else. Queued before the rules pass, so the user's own
+  // reason is the one that sticks if a rule matches the same entry.
+  if (!target && requestedGraph !== DEFAULT_GRAPH) {
     try {
-      const { applyRules } = await import("./graph-rules.js");
-      const report = await applyRules({ ids: [fm.id] });
+      const { enqueue } = await import("./graph-queue.js");
+      const res = await enqueue({
+        id: fm.id,
+        graph: requestedGraph,
+        reason: "you asked for this graph when capturing it",
+        proposedBy: "add",
+      });
+      console.log(
+        res.queued
+          ? `  → queued for '${requestedGraph}' review: memory queue list --graph ${requestedGraph}`
+          : `  ⚠ not queued for '${requestedGraph}': ${res.refusal}`,
+      );
+    } catch (err) {
+      console.warn(`  ⚠ not queued: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Standing distribution rules propose on every fresh capture — they queue a
+  // candidate, they never publish. A rule failure must not fail the capture.
+  if (!target) {
+    try {
+      const { enqueueRules } = await import("./graph-rules.js");
+      const report = await enqueueRules({ ids: [fm.id] });
       for (const line of report.actions) console.log(`  → rule: ${line}`);
+      if (report.queued > 0) {
+        console.log(`  review queued candidates: memory queue list`);
+      }
     } catch (err) {
       console.warn(`  ⚠ rules not applied: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -511,8 +542,23 @@ async function cmdGraphs(argv: string[]) {
     for (const v of report.containmentViolations) {
       console.log(`⚠ ${v.id} [${v.graph}] references non-members: ${v.targets.join(", ")}`);
     }
+    for (const v of report.staleVariants) {
+      console.log(
+        `⚠ ${v.id} [${v.graph}] published summary predates the current entry ` +
+          `(approved against ${v.declared}, now ${v.home}) — the copy is left as published`,
+      );
+    }
+    for (const v of report.variantViolations) {
+      console.log(`⚠ ${v.id} [${v.graph}] claims variant_of_hash but cannot be a variant: ${v.reason}`);
+    }
+    // A current variant is not an issue — it is the approved state. A stale
+    // one is, because the shared graph is quietly behind the private original.
     const issues =
-      report.drift.length + report.homeViolations.length + report.containmentViolations.length;
+      report.drift.length +
+      report.homeViolations.length +
+      report.containmentViolations.length +
+      report.staleVariants.length +
+      report.variantViolations.length;
     console.log(
       issues === 0
         ? "✓ all graphs consistent"
@@ -1206,27 +1252,240 @@ async function cmdPromote(argv: string[]) {
   );
 }
 
+async function cmdQueue(argv: string[]) {
+  const sub = argv[0];
+  const q = await import("./graph-queue.js");
+
+  const relDate = (iso?: string): string => (iso ? iso.slice(0, 10) : "—");
+
+  if (sub === "list" || sub === undefined) {
+    const { values } = parseArgs({
+      args: sub ? argv.slice(1) : argv,
+      options: {
+        graph: { type: "string" },
+        state: { type: "string" },
+        limit: { type: "string" },
+        json: { type: "boolean" },
+      },
+    });
+    const graph = values.graph ? requireGraph(values.graph as string) : undefined;
+    const view = await q.queueView(graph ? { graph } : {});
+    const state = values.state as string | undefined;
+    let rows = view.rows;
+    if (state === "stale") rows = rows.filter((r) => r.state === "stale");
+    else if (state === "blocked") rows = rows.filter((r) => r.blockedBy.length > 0);
+    else if (state === "ready") rows = rows.filter((r) => r.state === "ready" && r.blockedBy.length === 0);
+    else if (state && state !== "all") throw new Error("--state must be ready|stale|blocked|all");
+    const limit = values.limit ? positiveInt(values.limit, rows.length, "--limit") : rows.length;
+    rows = rows.slice(0, limit);
+
+    if (values.json) {
+      // Deliberately without the summary text: a routine driving the loop
+      // should not spray drafted redactions through its logs. `queue show`
+      // carries the body when it is actually needed.
+      console.log(
+        JSON.stringify({
+          generatedAt: view.generatedAt,
+          totalPending: view.totalPending,
+          graphs: view.graphs,
+          items: rows.map(({ summary, ...r }) => ({ ...r, hasSummary: summary !== undefined })),
+        }),
+      );
+      return;
+    }
+
+    for (const r of rows) {
+      const marks = [
+        r.summary !== undefined ? (r.state === "stale" ? "summary(STALE)" : "summary") : "raw",
+        r.action === "move" ? "move" : "",
+        r.blockedBy.length ? `blocked by ${r.blockedBy.join(", ")}` : "",
+      ].filter(Boolean);
+      console.log(`${r.date}  ${r.type.padEnd(16)} ${r.id}  [${r.graph}]  ${marks.join(" · ")}`);
+      console.log(`    ${r.proposedBy}: ${r.reason}`);
+    }
+    if (rows.length === 0) console.log("nothing pending");
+    for (const g of view.graphs) {
+      console.log(
+        `\n${g.graph}: ${g.pending} pending` +
+          (g.stale ? `, ${g.stale} stale` : "") +
+          (g.blocked ? `, ${g.blocked} blocked` : "") +
+          ` · ${g.members} members · reviewed ${relDate(g.lastReviewedAt)}` +
+          ` · swept through ${g.sweptThrough ?? "never"}`,
+      );
+    }
+    if (rows.length > 0) {
+      console.log(`\nApprove one at a time: memory queue approve <id> --graph <name> [--summary]`);
+    }
+    return;
+  }
+
+  if (sub === "show") {
+    const { values, positionals } = parseArgs({
+      args: argv.slice(1),
+      options: { graph: { type: "string" }, json: { type: "boolean" } },
+      allowPositionals: true,
+    });
+    const id = positionals[0];
+    if (!id || !values.graph) throw new Error("usage: memory queue show <id> --graph <name> [--json]");
+    const row = await q.requireRow(id, requireGraph(values.graph as string));
+    if (values.json) {
+      console.log(JSON.stringify(row));
+      return;
+    }
+    console.log(`${row.id}  [${row.graph}]  ${row.date}  ${row.type}`);
+    console.log(`  ${row.title}`);
+    console.log(`  proposed by ${row.proposedBy} at ${row.proposedAt}`);
+    console.log(`  why: ${row.reason}`);
+    if (row.blockedBy.length) console.log(`  blocked by: ${row.blockedBy.join(", ")}`);
+    if (row.summary !== undefined) {
+      console.log(`\n  --- proposed shared wording${row.state === "stale" ? " (STALE — the entry changed since this was drafted)" : ""} ---`);
+      for (const line of row.summary.split("\n")) console.log(`  ${line}`);
+      console.log(`\n  the private entry itself: ${rel(row.path)}`);
+    }
+    return;
+  }
+
+  if (sub === "add") {
+    const { values, positionals } = parseArgs({
+      args: argv.slice(1),
+      options: {
+        to: { type: "string" },
+        action: { type: "string" },
+        reason: { type: "string" },
+        "summary-file": { type: "string" },
+        "proposed-by": { type: "string" },
+        force: { type: "boolean" },
+        json: { type: "boolean" },
+      },
+      allowPositionals: true,
+    });
+    const id = positionals[0];
+    if (!id || !values.to || !values.reason) {
+      throw new Error(
+        'usage: memory queue add <id> --to <graph> --reason "…" [--action copy|move] [--summary-file <path|->] [--proposed-by <label>] [--force]',
+      );
+    }
+    const action = (values.action as string | undefined) ?? "copy";
+    if (action !== "copy" && action !== "move") throw new Error("--action must be copy or move");
+    // A redaction is usually several paragraphs; a file keeps it out of the
+    // shell's quoting rules (and out of the command text hooks scan).
+    let summary: string | undefined;
+    const file = values["summary-file"] as string | undefined;
+    if (file) {
+      const { readFile } = await import("node:fs/promises");
+      summary = (file === "-" ? await readStdin() : await readFile(file, "utf8")).trim();
+      if (!summary) throw new Error(`--summary-file ${file} is empty`);
+    }
+    const res = await q.enqueue({
+      id,
+      graph: requireGraph(values.to as string),
+      action,
+      reason: values.reason as string,
+      proposedBy: (values["proposed-by"] as string | undefined) ?? "agent",
+      ...(summary ? { summary } : {}),
+      force: Boolean(values.force),
+    });
+    if (values.json) {
+      console.log(JSON.stringify(res));
+      if (!res.queued) process.exitCode = 2;
+      return;
+    }
+    if (!res.queued) {
+      console.log(`– not queued: ${res.refusal}`);
+      process.exitCode = 2;
+      return;
+    }
+    if (res.replacedSummary) console.log(`⚠ replaced an earlier proposal that carried a drafted summary`);
+    console.log(`✓ queued ${res.id} → ${res.graph} (${action}${summary ? ", with a summary" : ""})`);
+    console.log(`  review it: memory queue list --graph ${res.graph}`);
+    return;
+  }
+
+  if (sub === "approve") {
+    const { values, positionals } = parseArgs({
+      args: argv.slice(1),
+      options: { graph: { type: "string" }, summary: { type: "boolean" }, json: { type: "boolean" } },
+      allowPositionals: true,
+    });
+    const id = positionals[0];
+    if (!id || !values.graph) {
+      throw new Error("usage: memory queue approve <id> --graph <name> [--summary]");
+    }
+    const res = await q.approveCandidate({
+      id,
+      graph: requireGraph(values.graph as string),
+      variant: values.summary ? "summary" : "raw",
+    });
+    if (values.json) {
+      console.log(JSON.stringify(res));
+      return;
+    }
+    console.log(
+      `✓ ${res.action === "move" ? "moved" : "copied"} ${res.id} → ${res.graph}` +
+        (res.variantOf ? " (the approved summary, not the entry's own wording)" : ""),
+    );
+    console.log(`  ${rel(res.path)}`);
+    return;
+  }
+
+  if (sub === "dismiss") {
+    const { values, positionals } = parseArgs({
+      args: argv.slice(1),
+      options: { graph: { type: "string" }, reason: { type: "string" } },
+      allowPositionals: true,
+    });
+    const id = positionals[0];
+    if (!id || !values.graph) {
+      throw new Error('usage: memory queue dismiss <id> --graph <name> [--reason "…"]');
+    }
+    const graph = requireGraph(values.graph as string);
+    await q.dismissCandidate({ id, graph, reason: values.reason as string | undefined });
+    console.log(`✓ ${id} won't be proposed for '${graph}' again unless its content changes`);
+    return;
+  }
+
+  if (sub === "sweep") {
+    const { values } = parseArgs({
+      args: argv.slice(1),
+      options: { graph: { type: "string" }, through: { type: "string" }, force: { type: "boolean" } },
+    });
+    if (!values.graph) throw new Error("usage: memory queue sweep --graph <name> [--through YYYY-MM-DD] [--force]");
+    const graph = requireGraph(values.graph as string);
+    const p = await q.markSwept(graph, {
+      through: values.through as string | undefined,
+      force: Boolean(values.force),
+    });
+    console.log(`✓ ${graph} swept through ${p.sweptThrough}`);
+    return;
+  }
+
+  throw new Error(
+    "usage: memory queue list|show|add|approve|dismiss|sweep — see memory --help",
+  );
+}
+
 async function cmdRules(argv: string[]) {
   const sub = argv[0];
-  const { readRules, applyRules, matchRule } = await import("./graph-rules.js");
+  const { readRules, enqueueRules, matchRule } = await import("./graph-rules.js");
 
   if (sub === "apply") {
     const { values } = parseArgs({ args: argv.slice(1), options: { "dry-run": { type: "boolean" } } });
     const dryRun = Boolean(values["dry-run"]);
-    const report = await applyRules({ dryRun });
+    const report = await enqueueRules({ dryRun });
     for (const c of report.plan.conflicts) console.log(`⚠ skipped ${c.id}: ${c.reason}`);
     if (dryRun) {
-      for (const a of report.plan.actions) console.log(`would ${a.action} ${a.id} → ${a.graph}`);
-      console.log(`\n${report.plan.actions.length} action(s), ${report.plan.conflicts.length} conflict(s) — dry run, nothing changed`);
+      for (const a of report.plan.actions) console.log(`would queue ${a.id} → ${a.graph} (${a.action})`);
+      console.log(`\n${report.plan.actions.length} candidate(s), ${report.plan.conflicts.length} conflict(s) — dry run, nothing queued`);
       return;
     }
     for (const line of report.actions) console.log(`✓ ${line}`);
     for (const b of report.blocked) {
-      console.log(`✗ blocked ${b.id} → ${b.graph}: references non-members ${b.ids.join(", ")}`);
+      console.log(`⚠ ${b.id} → ${b.graph} is queued but references non-members: ${b.ids.join(", ")}`);
     }
     console.log(
-      `\n${report.copied} copied, ${report.moved} moved, ${report.skippedConflicts} conflict(s), ${report.blocked.length} blocked`,
+      `\n${report.queued} queued, ${report.skipped} skipped, ${report.skippedConflicts} conflict(s), ${report.blocked.length} blocked`,
     );
+    if (report.queued > 0) console.log(`Review them: memory queue list`);
     return;
   }
 
@@ -1585,6 +1844,15 @@ Usage:
   memory promote candidates [--to <graph>] [--since DATE] [--until DATE] [--limit N]
             # private entries awaiting promotion review for <graph> (default public)
   memory promote dismiss <id> [--graph <name>] [--reason "…"]   # record "not for that graph" — hidden until content changes
+  memory queue list [--graph <name>] [--state ready|stale|blocked|all] [--limit N] [--json]
+            # candidates waiting on you, per graph, with each proposer's reasoning
+  memory queue show <id> --graph <name> [--json]        # one candidate in full, including any proposed shared wording
+  memory queue add <id> --to <graph> --reason "…" [--action copy|move] [--summary-file <path|->] [--proposed-by <label>] [--force]
+            # propose a candidate (what a sweep routine calls); --summary-file offers redacted wording to publish instead
+  memory queue approve <id> --graph <name> [--summary]  # publish it — --summary uses the proposed wording, else the entry's own
+  memory queue dismiss <id> --graph <name> [--reason "…"]       # decline — hidden until the entry's content changes
+  memory queue sweep --graph <name> [--through YYYY-MM-DD] [--force]
+            # record how far a routine has swept, so the next one resumes there
   memory people alias <slug> --add "Name" [--add "Nick"] [--remove "Name"] [--display "Full Name"] [--create]
             # nicknames/display names for a person slug (memory/people/<slug>.md, private store only);
             # questions and --person then resolve "Zhenya" → evgenia-ivanova
@@ -1627,6 +1895,7 @@ async function main() {
     case "slugs": return cmdSlugs(rest);
     case "connectors": return cmdConnectors(rest);
     case "promote": return cmdPromote(rest);
+    case "queue": return cmdQueue(rest);
     case "eval": return (await import("./eval-cli.js")).cmdEval(rest);
     case "people": return (await import("./people-cli.js")).cmdPeople(rest);
     case "sources": return cmdSources(rest);

@@ -1,6 +1,12 @@
 // @ts-check
 import { renderGraphView } from "./graph.js";
 import { renderGraphMap } from "./graphs-map.js";
+import {
+  parseGraphsHash,
+  queueSourceLabel,
+  relativeDate,
+  renderQueueMap,
+} from "./queue-map.js";
 import { comboboxHtml, wireCombobox } from "./combobox.js";
 
 /**
@@ -195,6 +201,15 @@ const state = {
   mergeErrors: {},
   confirmingMerge: "",
   mergeBusy: "",
+  /** @type {QueueView|null} per-graph counts and watermarks; drives the nav badge */
+  queue: null,
+  /** @type {{ slug: string, view: QueueView }|null} the one lane whose rows are loaded */
+  queueLane: null,
+  queueError: "",
+  /** @type {Record<string, string>} per-row error, keyed `${id}:${graph}` */
+  queueErrors: {},
+  /** key of the row with a request in flight — "" when idle */
+  queueBusy: "",
 };
 
 // ---------- helpers ----------
@@ -372,16 +387,30 @@ function splitFrontmatter(text) {
   return m ? { fm: m[1], body: text.slice(m[0].length) } : { fm: null, body: text };
 }
 
+/** @typedef {{ graph: string, pending: number, blocked: number, stale: number, members: number,
+ *              lastReviewedAt?: string, sweptThrough?: string, sweptAt?: string }} QueueLane */
+/** @typedef {{ id: string, graph: string, action: "copy"|"move", bodyHash: string, summary?: string,
+ *              reason: string, proposedBy: string, proposedAt: string, state: "ready"|"stale",
+ *              blockedBy: string[], date: string, type: string, title: string, path: string,
+ *              excerpt?: string }} QueueRow */
+/** @typedef {{ generatedAt: string, totalPending: number, graphs: QueueLane[], rows: QueueRow[] }} QueueView */
+
 // ---------- routing ----------
 
-/** @returns {{ view: "record" } | { view: "entry", id: string } | { view: "graph", graph: string } | { view: "graphs" } | { view: "graphmanifest", slug: string } | { view: "connectors" } | { view: "connector", name: string } | { view: "sources" } | { view: "source", name: string } | { view: "maintenance" }} */
+/** @returns {{ view: "record" } | { view: "entry", id: string } | { view: "graph", graph: string } | { view: "graphs", tab: "graphs"|"rules"|"queue", queueSlug: string } | { view: "graphmanifest", slug: string } | { view: "connectors" } | { view: "connector", name: string } | { view: "sources" } | { view: "source", name: string } | { view: "maintenance" }} */
 function route() {
   const h = location.hash;
   if (h.startsWith("#/entry/")) return { view: "entry", id: decodeURIComponent(h.slice(8)) };
   if (h.startsWith("#/entries")) return { view: "record" }; // legacy alias — old links keep working
-  // #/graphs* is checked before #/graph* — the management screen shares the prefix
-  if (h.startsWith("#/graphs/")) return { view: "graphmanifest", slug: decodeURIComponent(h.slice(9)) };
-  if (h.startsWith("#/graphs")) return { view: "graphs" };
+  // #/graphs* is checked before #/graph* — the management screen shares the
+  // prefix. parseGraphsHash splits the tabs from a graph slug by exact
+  // segment, so a graph called `queue-archive` still reaches its manifest.
+  const g = parseGraphsHash(h);
+  if (g) {
+    return g.kind === "manifest"
+      ? { view: "graphmanifest", slug: g.slug }
+      : { view: "graphs", tab: g.tab, queueSlug: g.slug };
+  }
   if (h.startsWith("#/graph/")) {
     const slug = decodeURIComponent(h.slice(8));
     // legacy: the home graph was once named "private"
@@ -435,7 +464,9 @@ function renderHeader() {
           <a href="#/graphs">manage graphs…</a>
         </div>
       </details>
-      <a href="#/graphs" ${r.view === "graphs" || r.view === "graphmanifest" ? 'aria-current="page"' : ""}>Manage Graphs</a>
+      <a href="#/graphs" ${r.view === "graphs" || r.view === "graphmanifest" ? 'aria-current="page"' : ""}>Manage Graphs${
+        state.queue?.totalPending ? `<span class="n n-warn">${state.queue.totalPending}</span>` : ""
+      }</a>
       <a href="#/maintenance" ${r.view === "maintenance" ? 'aria-current="page"' : ""}>Maintenance</a>
       <a href="#/connectors" ${r.view === "connectors" || r.view === "connector" ? 'aria-current="page"' : ""}>Connectors</a>
       <a href="#/sources" ${r.view === "sources" || r.view === "source" ? 'aria-current="page"' : ""}>Sources</a>
@@ -2270,14 +2301,35 @@ function openNewGraphModal() {
 
 /** @type {(() => void) | null} teardown for the relations map's animation loop */
 let stopGraphMap = null;
+/** @type {(() => void) | null} teardown for the review queue's lane map */
+let stopQueueMap = null;
 
-function renderGraphs() {
+/** The tab strip. Real links, so middle-click and copy-link behave.
+ * @param {"graphs"|"rules"|"queue"} tab */
+function graphsTabsHtml(tab) {
+  const pending = state.queue?.totalPending ?? 0;
+  /** @param {string} href @param {string} key @param {string} label @param {string} extra */
+  const t = (href, key, label, extra) =>
+    `<a class="gtab" href="${href}" ${tab === key ? 'aria-current="page"' : ""}>${label}${extra}</a>`;
+  return `<nav class="gtabs">
+    ${t("#/graphs", "graphs", "graphs", "")}
+    ${t("#/graphs/rules", "rules", "rules", rulesDirty() ? '<span class="gtab-dot" title="unsaved changes"></span>' : "")}
+    ${t("#/graphs/queue", "queue", "review queue", pending ? `<span class="n">${pending}</span>` : "")}
+  </nav>`;
+}
+
+/**
+ * @param {"graphs"|"rules"|"queue"} [tab]
+ * @param {string} [queueSlug]
+ */
+function renderGraphs(tab = "graphs", queueSlug = "") {
   const main = $("#main");
-  if (state.graphs === null || state.rules === null) {
+  if (state.graphs === null || state.rules === null || state.queue === null) {
     main.innerHTML = `<div class="loading">loading…</div>`;
     Promise.all([
       state.graphs === null ? loadGraphs() : Promise.resolve(),
       state.rules === null ? loadRules() : Promise.resolve(),
+      state.queue === null ? loadQueue() : Promise.resolve(),
     ]).then(render, (err) => {
       main.innerHTML = `<div class="error-banner">${esc(err instanceof Error ? err.message : String(err))}</div>`;
     });
@@ -2285,33 +2337,60 @@ function renderGraphs() {
   }
   if (state.rulesDraft === null) state.rulesDraft = (state.rules ?? []).map(cloneRule);
 
-  main.innerHTML = `
-    <div class="colophon">graphs partition the store into shareable views — capture lands in the <b>default</b> graph, and an entry reaches a named graph by promotion or a distribution rule<span class="sep">·</span>named graphs are self-contained; only the default graph can reference entries that left it</div>
+  // Both maps animate and bind listeners. With tabs, switching away destroys
+  // a host without its own render path running, so BOTH are torn down here,
+  // unconditionally, before any markup is replaced. The rAF loops notice a
+  // detached host within a frame; the listeners would leak forever.
+  stopGraphMap?.();
+  stopGraphMap = null;
+  stopQueueMap?.();
+  stopQueueMap = null;
+
+  main.innerHTML = `${graphsTabsHtml(tab)}<div id="gtab-body"></div>`;
+  if (tab === "queue") {
+    renderQueue(queueSlug);
+    wireQueueActions();
+    return;
+  }
+  if (tab === "rules") {
+    renderRulesTab();
+    return;
+  }
+  renderGraphsTab();
+}
+
+function renderGraphsTab() {
+  $("#gtab-body").innerHTML = `
+    <div class="colophon">graphs partition the store into shareable views — capture lands in the <b>default</b> graph, and an entry reaches a named graph only when you approve it in the review queue<span class="sep">·</span>named graphs are self-contained; only the default graph can reference entries that left it</div>
     <div id="gmap-host"></div>
     <div class="graphs-head">
       <h2>Graphs</h2>
       <button class="chip" id="new-graph">+ new graph</button>
     </div>
     <div class="ledger l-top glist">${orderedGraphs().map(graphLedgerRow).join("")}</div>
-    <div class="graphs-head rules-head">
-      <h2>Distribution rules</h2>
-      <button class="chip" id="rules-run">run rules now</button>
-    </div>
-    <div class="colophon">a rule copies or moves every entry matching a tag or type into a target graph — applied on capture, and on demand to the existing record</div>
-    <div id="rules-host"></div>
   `;
-  // the map animates, so its loop is torn down before the screen is rebuilt
-  stopGraphMap?.();
+  stopQueueMap = null;
   stopGraphMap = renderGraphMap($("#gmap-host"), state.entries, orderedGraphs());
 
   $("#new-graph").addEventListener("click", openNewGraphModal);
-  $("#rules-run").addEventListener("click", () => openBackfillModal(null));
   $(".glist").addEventListener("click", (ev) => {
     const t = ev.target;
     if (!(t instanceof HTMLElement)) return;
     const del = t.closest("[data-gdel]");
     if (del) openDeleteGraphModal(/** @type {string} */ (del.getAttribute("data-gdel")));
   });
+}
+
+function renderRulesTab() {
+  $("#gtab-body").innerHTML = `
+    <div class="graphs-head rules-head">
+      <h2>Distribution rules</h2>
+      <button class="chip" id="rules-run">run rules now</button>
+    </div>
+    <div class="colophon">a rule proposes every entry matching a tag or type for a target graph — it queues a candidate for review, on capture and on demand; nothing is copied until you approve it</div>
+    <div id="rules-host"></div>
+  `;
+  $("#rules-run").addEventListener("click", () => openBackfillModal(null));
 
   const host = $("#rules-host");
   host.addEventListener("change", (ev) => {
@@ -2362,6 +2441,186 @@ function renderGraphs() {
     }
   });
   renderRulesTable();
+}
+
+// ---------- review queue ----------
+
+/** Fetch the per-graph counts and watermarks (no bodies — this drives the badge). */
+async function loadQueue() {
+  const res = await fetch("/api/queue");
+  if (!res.ok) throw new Error(`failed to load /api/queue (${res.status})`);
+  state.queue = /** @type {QueueView} */ (await res.json());
+}
+
+/** Fetch one lane's candidates. @param {string} slug */
+async function loadQueueLane(slug) {
+  const res = await fetch(`/api/queue/${encodeURIComponent(slug)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? `failed to load the ${slug} queue (${res.status})`);
+  state.queueLane = { slug, view: /** @type {QueueView} */ (data) };
+}
+
+/** @param {QueueRow} row */
+const rowKey = (row) => `${row.id}:${row.graph}`;
+
+/** The three POSTs share everything but their endpoint and payload.
+ * @param {QueueRow} row @param {string} action @param {Record<string, unknown>} body */
+async function postQueue(row, action, body) {
+  const key = rowKey(row);
+  state.queueBusy = key;
+  state.queueErrors[key] = "";
+  render();
+  try {
+    const res = await fetch(`/api/queue/${encodeURIComponent(row.graph)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, confirm: true }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? `${action} failed (${res.status})`);
+    // The server is authoritative: refetch rather than patching state here.
+    // An approve changes an entry's memberships, so the record needs it too.
+    await Promise.all([loadQueue(), loadQueueLane(row.graph), reloadRecordData()]);
+  } catch (err) {
+    state.queueErrors[key] = err instanceof Error ? err.message : String(err);
+  }
+  state.queueBusy = "";
+  const r = route();
+  if (r.view === "graphs" && r.tab === "queue") render();
+}
+
+/** @param {QueueLane} lane */
+function laneHeaderHtml(lane) {
+  // Counts, not a progress bar: nothing here is "done", and a mostly-filled
+  // bar reads as progress against a total that does not exist.
+  const ready = Math.max(0, lane.pending - lane.blocked - lane.stale);
+  return `
+    <div class="qhead">
+      <h2>${esc(lane.graph)}</h2>
+      <span class="qcount">${lane.pending} pending</span>
+      <span class="qtally">
+        <b>${ready}</b> ready to approve${
+          lane.blocked ? ` <span class="sep">·</span> <b class="is-blocked">${lane.blocked}</b> blocked` : ""
+        }${lane.stale ? ` <span class="sep">·</span> <b class="is-stale">${lane.stale}</b> stale` : ""}
+      </span>
+      <span class="qmeta">${lane.members} member${lane.members === 1 ? "" : "s"}</span>
+      <span class="qmeta">reviewed ${esc(relativeDate(lane.lastReviewedAt))}</span>
+      <span class="qmeta${lane.sweptThrough ? "" : " is-stale"}">swept through ${esc(lane.sweptThrough ?? "never")}</span>
+    </div>`;
+}
+
+/** @param {QueueRow} row */
+function queueCardHtml(row) {
+  const key = rowKey(row);
+  const busy = state.queueBusy === key;
+  const err = state.queueErrors[key] ?? "";
+  const blocked = row.blockedBy.length > 0;
+  const dis = busy ? " disabled" : "";
+
+  const actions = blocked
+    ? row.blockedBy
+        .map((b) => `<button class="chip chip-primary" data-qparent="${esc(b)}" data-qgraph="${esc(row.graph)}"${dis}>queue ${esc(b)} too</button>`)
+        .join("") + `<button class="chip chip-danger" data-qdismiss="${esc(key)}"${dis}>dismiss</button>`
+    : row.summary !== undefined
+      ? `<button class="chip chip-primary" data-qapprove="${esc(key)}" data-qvariant="summary"${row.state === "stale" || busy ? " disabled" : ""}>approve summary → copy</button>
+         <button class="chip" data-qapprove="${esc(key)}" data-qvariant="raw"${dis}>approve raw → copy</button>
+         <button class="chip chip-danger" data-qdismiss="${esc(key)}"${dis}>dismiss</button>`
+      : `<button class="chip chip-primary" data-qapprove="${esc(key)}" data-qvariant="raw"${dis}>approve → copy</button>
+         <a class="chip" href="#/entry/${encodeURIComponent(row.id)}">open entry</a>
+         <button class="chip chip-danger" data-qdismiss="${esc(key)}"${dis}>dismiss</button>`;
+
+  return `
+    <div class="qcard${busy ? " is-busy" : ""}">
+      <div class="qcard-head">
+        <span class="badge tdot gt-${esc(row.type)}">${esc(row.type)}</span>
+        <span class="qtitle">${esc(row.title)}</span>
+        <span class="qid">${esc(row.date)} · <code>${esc(row.id)}</code></span>
+      </div>
+      <p class="qwhy${blocked ? " is-blocked" : ""}">
+        <span class="qwhy-src">${esc(queueSourceLabel(row.proposedBy, row.action))}</span><br>${esc(row.reason)}
+      </p>
+      ${blocked ? `<p class="qblocked">A shared graph only references its own members. ${esc(row.blockedBy.join(", "))} ${row.blockedBy.length === 1 ? "is" : "are"} not in ${esc(row.graph)} yet.</p>` : ""}
+      ${row.summary === undefined ? "" : `
+      <div class="qsplit">
+        <div class="qside">
+          <div class="qside-h">private home · as written</div>
+          <div class="qside-b">${esc(row.excerpt ?? "")}</div>
+        </div>
+        <div class="qside qside-shared">
+          <div class="qside-h">shared copy · proposed wording</div>
+          <div class="qside-b">${esc(row.summary)}</div>
+          <div class="qvariant">${row.state === "stale" ? "drafted against an older version of this entry — re-draft it, or approve the entry's own wording" : "published as a declared variant"}</div>
+        </div>
+      </div>`}
+      ${row.summary !== undefined && row.state !== "stale" ? `<p class="qnote">approving raw publishes the private wording verbatim</p>` : ""}
+      <div class="qactions">${actions}</div>
+      ${err ? `<p class="qerr">${esc(err)}</p>` : ""}
+    </div>`;
+}
+
+/** @param {string} slug */
+function renderQueue(slug) {
+  const body = $("#gtab-body");
+  body.innerHTML = `
+    <div class="colophon">nothing reaches a shared graph until you approve it here — rules, routines and explicit requests all propose, you decide<span class="sep">·</span>a candidate may offer redacted wording to publish instead of the entry's own</div>
+    <div id="qmap-host"></div>
+    <div id="qlane-host"></div>`;
+  stopQueueMap = renderQueueMap($("#qmap-host"), state.queue?.graphs ?? [], slug);
+
+  const host = $("#qlane-host");
+  if (!slug) {
+    const total = state.queue?.totalPending ?? 0;
+    host.innerHTML = `<div class="empty">${total ? "pick a lane above to review its candidates" : "nothing is waiting — rules and sweep routines will queue candidates here"}</div>`;
+    return;
+  }
+  if (state.queueError) {
+    host.innerHTML = `<div class="error-banner">${esc(state.queueError)}</div>`;
+    return;
+  }
+  if (state.queueLane?.slug !== slug) {
+    host.innerHTML = `<div class="loading">loading…</div>`;
+    loadQueueLane(slug).then(render, (err) => {
+      state.queueError = err instanceof Error ? err.message : String(err);
+      render();
+    });
+    return;
+  }
+  const { view } = state.queueLane;
+  const lane = view.graphs[0];
+  host.innerHTML =
+    (lane ? laneHeaderHtml(lane) : "") +
+    (view.rows.length
+      ? view.rows.map(queueCardHtml).join("")
+      : `<div class="empty">nothing pending for ${esc(slug)}</div>`);
+}
+
+/** Delegated handlers for the queue cards, bound to the (rebuilt) tab body. */
+function wireQueueActions() {
+  $("#gtab-body").addEventListener("click", (ev) => {
+    const t = ev.target;
+    if (!(t instanceof HTMLElement)) return;
+    const rows = state.queueLane?.view.rows ?? [];
+
+    const approve = t.closest("[data-qapprove]");
+    if (approve) {
+      const row = rows.find((r) => rowKey(r) === approve.getAttribute("data-qapprove"));
+      if (row) postQueue(row, "approve", { id: row.id, variant: approve.getAttribute("data-qvariant") });
+      return;
+    }
+    const dismiss = t.closest("[data-qdismiss]");
+    if (dismiss) {
+      const row = rows.find((r) => rowKey(r) === dismiss.getAttribute("data-qdismiss"));
+      if (row) postQueue(row, "dismiss", { id: row.id });
+      return;
+    }
+    const parent = t.closest("[data-qparent]");
+    if (parent) {
+      const id = parent.getAttribute("data-qparent");
+      const graph = parent.getAttribute("data-qgraph");
+      const row = rows.find((r) => r.graph === graph && r.blockedBy.includes(id ?? ""));
+      if (row && id) postQueue(row, "enqueue", { id, becauseOf: row.id });
+    }
+  });
 }
 
 // ---------- GRAPH.md manifest editor ----------
@@ -2466,7 +2725,7 @@ function render() {
         graph: r.graph,
       });
     }
-  } else if (r.view === "graphs") renderGraphs();
+  } else if (r.view === "graphs") renderGraphs(r.tab, r.queueSlug);
   else if (r.view === "graphmanifest") renderGraphManifest(r.slug);
   else if (r.view === "maintenance") renderMaintenance();
   else if (r.view === "connectors") renderConnectors();
@@ -2640,6 +2899,10 @@ async function boot() {
   const graphsP = loadGraphs().catch((err) => {
     console.error(err);
   });
+  // the badge is nice-to-have; a sick queue must never hold up the record
+  const queueP = loadQueue().catch((err) => {
+    console.error(err);
+  });
   try {
     const res = await fetch("/api/data");
     if (!res.ok) throw new Error(`failed to load /api/data (${res.status})`);
@@ -2650,7 +2913,7 @@ async function boot() {
   } catch (err) {
     state.error = err instanceof Error ? err.message : String(err);
   }
-  await graphsP;
+  await Promise.all([graphsP, queueP]);
   render();
 }
 

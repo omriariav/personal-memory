@@ -9,13 +9,15 @@ The store is **one DEFAULT graph plus N named shared graphs**: `default`
 shared graphs under `memory-graphs/<slug>/` (each its own nested git repo;
 none ship built-in; `memory graphs list` shows the registry). One memory can
 be a **member of several graphs** — byte-identical synced copies, the default
-graph always the home. Recall spans all graphs by default (shared memberships
-labeled `[<graph>,…]`; `--graph <name>` narrows). **Capture ALWAYS lands in
-the default graph** — entries reach shared graphs only via the user's
-standing distribution rules (auto-applied; configured in the UI's `#/graphs`
-screen), the user-confirmed promotion review (`/promote --to <graph>`), or an
-explicit "log this to <graph>" request. Shared graphs are self-contained:
-members only reference fellow members — the CLI enforces it.
+graph always the home (the one exception: a copy declaring `variant_of_hash`
+holds a user-approved redaction and diverges in body only). Recall spans all
+graphs by default (shared memberships labeled `[<graph>,…]`; `--graph <name>`
+narrows). **Capture ALWAYS lands in the default graph**, and nothing leaves
+it on its own: standing distribution rules, an explicit "log this to
+<graph>", and sweep routines all **propose** into that graph's **review
+queue**, and the user approves each entry before it is copied. Shared graphs
+are self-contained: members only reference fellow members — the CLI enforces
+it.
 
 > Run commands with Node ≥ 20: `nvm use 20` then `npx tsx src/cli.ts <cmd>`.
 
@@ -77,22 +79,33 @@ When the user wants to log/remember something, use the `log-memory` skill and
 `npx tsx src/cli.ts add …`. Reuse existing people/team slugs (check `memory list`
 first).
 
-**Graphs:** every capture is logged to the DEFAULT graph — never pass
-`--graph <name>` unless the user explicitly asked for that graph (and it
-satisfies the graph's eligibility criteria: its `GRAPH.md` body). Entries
-otherwise reach shared graphs via:
+**Graphs:** every capture is logged to the DEFAULT graph. `--graph <name>`
+is still reserved for an explicit user request, but it no longer writes into
+that graph: the entry homes in the default graph and a review candidate is
+queued. Entries reach a shared graph through exactly one door — **the user
+approving a queued candidate**. Three things propose into that queue:
 (1) **standing rules** (`memory rules list|apply`; configured per tag/type in
-the UI `#/graphs` screen; auto-applied at capture — report the CLI's
-`→ rule:` lines), or (2) the **promotion review**: `/promote --to <graph>`
-(`skills/promote-graph/SKILL.md`) — `memory promote candidates --to <graph>`
-→ judge against the graph's criteria → the user confirms each entry →
-`memory copy <id> --to <graph>` (copy is the default; `move` only on explicit
-request); declines recorded with `memory promote dismiss <id> --graph <g>`.
+the UI `#/graphs/rules` screen; applied at capture — report the CLI's
+`→ rule: queued` lines). A saved rule is NOT standing approval;
+(2) **sweep routines** — `/sweep-graphs` (`skills/sweep-graphs/SKILL.md`)
+judges fresh entries against a graph's `GRAPH.md` criteria and calls
+`memory queue add <id> --to <g> --reason "…"`, optionally offering redacted
+wording with `--summary-file`;
+(3) an explicit `--graph` at capture.
+Draining a queue is `/promote` (`skills/review-queue/SKILL.md`) or the UI's
+`#/graphs/queue` tab — both drive the same store: `memory queue list` →
+present each candidate with its proposer's reason → the user confirms →
+`memory queue approve <id> --graph <g>` (`--summary` publishes the proposed
+redaction instead of the entry's own words); declines go to `memory queue
+dismiss <id> --graph <g>`.
 Graph management (create graphs, edit rules, repair drift) → the
 `manage-graphs` skill (`/manage-graphs`). Wrong placements are fixed with
 `copy`/`move`, never by moving files. For single-graph recall (preparing
 shareable content), use `recall-graph` (`/recall-graph <graph> …`) — it never
-falls back to other graphs.
+falls back to other graphs. **A shared copy may be a redaction**: when recall
+surfaces an entry that is a declared variant in the graph you are preparing
+content for, read that graph's copy before quoting it — the index holds the
+private wording.
 
 **Timeline chains:** when the new memory develops or settles an earlier matter
 (e.g. a `decision` resolving a `pending-decision`), pass `--follows <earlier-id>`
@@ -131,4 +144,4 @@ Captures without a source id hit a near-duplicate guard; resolve it with
 
 See `AGENTS.md` for the full data model, schema, and conventions (shared with
 Codex). Skills: `skills/recall-memory`, `skills/log-memory`, `skills/pull-memories`,
-`skills/compact-tags`.
+`skills/compact-tags`, `skills/sweep-graphs`, `skills/review-queue`.

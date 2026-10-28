@@ -94,6 +94,12 @@ memory rules [list]
 memory rules apply [--dry-run]
 memory promote candidates --to <graph>
 memory promote dismiss <id> --graph <g>
+memory queue [list] [--graph <g>] [--state ready|stale|blocked|all] [--json]
+memory queue show <id> --graph <g> [--json]
+memory queue add <id> --to <g> --reason "..." [--summary-file <path|->] [--force]
+memory queue approve <id> --graph <g> [--summary]
+memory queue dismiss <id> --graph <g> [--reason "..."]
+memory queue sweep --graph <g> [--through YYYY-MM-DD] [--force]
 ```
 
 `copy` adds a membership and keeps the default-graph copy; `move` replaces the
@@ -103,6 +109,28 @@ shared-graph entry may only reference fellow members, so copying an entry whose
 
 `graphs delete` is permanent and is blocked while entries exist only in that
 graph.
+
+### The review queue
+
+Nothing reaches a shared graph on its own. Standing rules, an explicit
+"log this to X", and sweep routines all end at the same place: a queue of
+candidates for you to approve one at a time, here or on the Manage Graphs
+screen. Each row says who proposed it and why.
+
+`queue add` is what a sweep calls once it has judged an entry against the
+graph's `GRAPH.md` criteria. When the substance belongs in the graph but the
+wording does not, it can offer a redaction with `--summary-file` — approving
+with `--summary` publishes those words instead of the entry's own, and the
+shared copy records what it was derived from so `graphs sync` can tell it
+apart from drift. Reword the private entry afterwards and the published copy
+stays exactly as you approved it, coming back to the queue marked stale.
+
+`queue sweep` records how far a routine has read, so the next run resumes
+there instead of re-judging the whole corpus. It refuses to move the
+watermark backwards unless you pass `--force`.
+
+Declining is remembered against the entry's current content: a dismissed
+candidate stays out until the entry itself changes.
 
 ## Summaries and housekeeping
 

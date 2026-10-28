@@ -10,31 +10,43 @@ hard contract, not a style preference.**
 with shell redirection, not "just this once". The store is one DEFAULT graph
 (`memory/` — secret, local-only) plus N named shared graphs (`memory-graphs/<slug>/`), each its
 own nested git repo — and the contract covers every store equally. One entry
-can be a member of several graphs (byte-identical synced copies); ONLY the
-CLI keeps them in sync.
+can be a member of several graphs (byte-identical synced copies, unless a
+shared copy declares `variant_of_hash` — a user-approved redaction published
+through the review queue, which diverges in BODY only); ONLY the CLI keeps
+them in sync.
 
 - **Capture** goes ONLY through the CLI and ALWAYS lands in the default graph:
   `npx tsx src/cli.ts add --title … --type … [--people …] [--source-ids …] --body "…"`
   (via the `log-memory` / `pull-memories` skills, or `/remember` / `/pull-memories`).
   `--graph <name>` is reserved for an explicit user request that satisfies
-  that graph's eligibility criteria — never an agent's own judgment.
+  that graph's eligibility criteria — never an agent's own judgment. It no
+  longer writes into that graph: the entry homes in the default graph and a
+  review candidate is queued for the named one.
 - **Membership** changes ONLY through
+  `cli.ts queue approve <id> --graph <name>` (the reviewed path — what every
+  proposal ends at),
   `cli.ts copy <id> --to <graph>` (add a synced copy; the entry stays in the default graph too) and
   `cli.ts move <id> --to <graph>` (replace the WHOLE membership) — never by
   relocating files. Both validate containment, re-index, and checkpoint every
   affected repo. A shared graph is self-contained: its members never reference
   non-members (`follows`/`sources`) — enforced at `add`, `link`, `copy`,
   `move`, and `rules apply` time.
-- **Distribution** into shared graphs happens through (a) the user's standing
-  rules (`memory/graphs/rules.json`, editable config; `cli.ts rules apply` —
-  ALWAYS dry-run + show the plan before a confirmed backfill) or (b) the
-  user-confirmed promotion review (`/promote`): `cli.ts promote candidates
-  --to <graph>` → eligibility judgment → **per-entry user confirmation** →
-  `copy`/`move`; declines recorded with `promote dismiss <id> --graph <g>`.
-  Never place an entry in a shared graph the user hasn't approved (a saved
-  rule IS standing approval).
+- **Distribution** into shared graphs is PROPOSE-then-approve. Standing rules
+  (`memory/graphs/rules.json`), an explicit `--graph` at capture, and sweep
+  routines all end in the same place: a per-graph **review queue**. Nothing
+  reaches a shared graph until the user approves that specific entry, one at
+  a time, in the UI or via `cli.ts queue approve <id> --graph <g>`; declines
+  go to `queue dismiss` and are remembered until the entry's content changes.
+  A saved rule is **not** standing approval — it only decides what is worth
+  putting in front of the user. An agent proposes with
+  `cli.ts queue add <id> --to <g> --reason "…"`, optionally offering redacted
+  wording via `--summary-file`; it never approves on the user's behalf.
 - **Consistency**: drifted copies are repaired ONLY by `cli.ts graphs sync`
-  (the default copy wins, checkpointed) — never by hand-editing a copy.
+  (the default copy wins, checkpointed) — never by hand-editing a copy. A copy
+  declaring `variant_of_hash` is NOT drift and is NEVER overwritten: rewriting
+  an approved redaction from the home would publish the private wording it was
+  written to keep out. When the home's body changes, the variant is reported
+  stale and re-proposed for review; the published copy stays as approved.
 - **Graph deletion** ONLY through `cli.ts graphs delete <slug> --confirm` (or
   the UI's confirm modal) and ONLY after the user explicitly approves — it is
   permanent (store + git history). Blocked while any entry exists only in
@@ -76,6 +88,8 @@ four things a manual write skips:
 |---|---|---|
 | `memory/entries/**` | ❌ never by hand | `cli.ts add` / `add --update <id>` / `link` / `remove` / `copy` / `move` / `slugs merge` / `rules apply` only |
 | `memory-graphs/*/entries/**` | ❌ never by hand | same CLI paths |
+| `memory-graphs/*/summaries/**` Synthesis | ⚠️ prose only | and written from that graph's OWN copies — never from recall, which returns the private body of a redacted member |
+| `memory/graphs/queue.json` | ❌ never by hand | `cli.ts queue add|approve|dismiss|sweep` only — rows carry content hashes that must match the store |
 | `memory/summaries/**`, `memory-graphs/*/summaries/**` | ✏️ only the `## Synthesis` section of a scaffold `digest` created — then run `cli.ts index` | Edit tool |
 | `memory/connectors/**` | ✅ private connector overrides | Edit tool or web UI |
 | `memory/graphs/rules.json` | ✅ distribution-rules config | Edit tool or web UI (`#/graphs`) |

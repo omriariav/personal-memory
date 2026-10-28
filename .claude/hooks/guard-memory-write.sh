@@ -9,7 +9,8 @@
 #
 # Allowed and untouched by this guard: every store's summaries/ (Synthesis
 # prose after `digest`), memory/connectors/ + memory/routing/ + memory/graphs/
-# (private config overrides). Every store's entries/ is protected: memory/
+# (private config overrides) — EXCEPT memory/graphs/queue.json, the review
+# queue, whose rows carry content hashes that must match the store. Every store's entries/ is protected: memory/
 # (private graph) and memory-graphs/<name>/ (each named shared graph), as is
 # memory/eval/ (the golden set — written only by `cli.ts eval …`, which
 # validates ids and checkpoints the nested repo).
@@ -54,6 +55,13 @@ JSON
   exit 0
 }
 
+deny_queue() {
+  cat <<JSON
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Never hand-edit the review queue — its rows carry content hashes that must match the store, and a hand-written row is either ignored or acted on against the wrong text. Use the CLI:\n  npx tsx src/cli.ts queue add <id> --to <graph> --reason \"…\" [--summary-file <path>]\n  npx tsx src/cli.ts queue approve|dismiss <id> --graph <graph>\n  npx tsx src/cli.ts queue list [--graph <graph>] [--json]"}}
+JSON
+  exit 0
+}
+
 case "$tool" in
   Write|Edit|NotebookEdit)
     file_path="$(field .tool_input.file_path)"
@@ -62,6 +70,7 @@ case "$tool" in
     [ -n "$file_path" ] || file_path="$input"
     case "$file_path" in
       *memory/entries/*|*memory-public/entries/*|*memory-graphs/*/entries/*|*.index/*|*memory/eval/*) deny ;;
+      *memory/graphs/queue.json*) deny_queue ;;
     esac
     ;;
   Bash)
@@ -73,7 +82,14 @@ case "$tool" in
     case "$cmd" in
       *memory/entries*|*memory-public/entries*|*memory-graphs/*/entries*|*.index/*|*memory/eval/*)
         case "$cmd" in
-          *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'touch '*|*'truncate '*|*'dd '*) deny ;;
+          *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'perl -pi'*|*'touch '*|*'truncate '*|*'dd '*|*'install '*|*'python '*|*'python3 '*|*'node '*) deny ;;
+        esac
+        ;;
+    esac
+    case "$cmd" in
+      *memory/graphs/queue.json*)
+        case "$cmd" in
+          *'>'*|*'tee '*|*'cp '*|*'mv '*|*'rm '*|*'sed -i'*|*'perl -pi'*|*'touch '*|*'truncate '*|*'dd '*|*'install '*|*'python '*|*'python3 '*|*'node '*) deny_queue ;;
         esac
         ;;
     esac

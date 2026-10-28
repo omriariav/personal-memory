@@ -1,0 +1,557 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { z } from "zod";
+import { DEFAULT_GRAPH } from "./schema.js";
+import { MEMORY_DIR, hashBody } from "./ingest.js";
+import { blockedRefs, listGraphStores, requireGraph } from "./graphs.js";
+import { openCatalog } from "./catalog.js";
+import { openCatalogForWrite } from "./store.js";
+import { commitMemoryRepo } from "./memory-git.js";
+import {
+  dismissPromotion,
+  dismissalGraph,
+  readPromotionDismissals,
+  type PromotionDismissal,
+} from "./promote.js";
+
+/**
+ * The per-graph review queue: candidates proposed for a shared graph, waiting
+ * on the user.
+ *
+ * Nothing in here publishes anything. A row is a *proposal* — written by a
+ * standing distribution rule, by an explicit "log this to X", or by a
+ * Claude/Codex routine that judged an entry against the graph's `GRAPH.md`
+ * criteria. The user approves or declines each one, in the UI or in chat;
+ * only `approveCandidate` touches a shared store.
+ *
+ * Rows live in `memory/graphs/queue.json`, beside `rules.json` and NOT in
+ * `.index/`. That directory is documented as a rebuildable derivative —
+ * `rm -rf .index && memory index` regenerates all of it — and a
+ * routine-drafted redaction is not something `memory index` can regenerate.
+ * Keeping the queue in the private store also means it travels with that
+ * repo's history and never reaches a shared one.
+ *
+ * There is no status field and no cleanup job. A row's fate is recomputed
+ * from live state on every read (`reconcileQueue`), the way slug proposals
+ * already work: approved, dismissed, deleted and hand-copied entries all drop
+ * out on their own.
+ */
+
+const slug = z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "must be a lower-kebab slug");
+const bodyHash = z.string().regex(/^[0-9a-f]{16}$/, "must be a 16-hex body hash");
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be ISO YYYY-MM-DD");
+
+export const QUEUE_PATH = join(MEMORY_DIR, "graphs", "queue.json");
+
+export const QueueRowSchema = z
+  .object({
+    /** The entry proposed. Unique together with `graph`. */
+    id: slug,
+    /** Target shared graph. Never the default graph — that is every entry's home. */
+    graph: slug,
+    /** What approving would do. `copy` keeps the private home; `move` does not. */
+    action: z.enum(["copy", "move"]),
+    /** The home's BODY hash when the row was written — what a summary was drafted against. */
+    bodyHash,
+    /** A redacted or condensed body to publish instead of the entry's own words. */
+    summary: z.string().min(1).optional(),
+    /** Why the proposer thinks this belongs in the graph. Shown to the user verbatim. */
+    reason: z.string().min(1),
+    /** "rules" (a standing rule), "add" (an explicit --graph), or a routine's label. */
+    proposedBy: z.string().min(1),
+    proposedAt: z.string().min(1),
+  })
+  .strict()
+  .refine((r) => r.graph !== DEFAULT_GRAPH, {
+    message: "the default graph is every entry's home, never a review target",
+  })
+  .refine((r) => !(r.action === "move" && r.summary !== undefined), {
+    // A move deletes the private home, and a variant exists precisely to
+    // diverge from one. There would be nothing left to be a variant of.
+    message: "a move cannot carry a summary — a moved entry has no private home to diverge from",
+  });
+
+export const GraphProgressSchema = z
+  .object({
+    /** When the user last approved or declined anything for this graph. */
+    lastReviewedAt: z.string().optional(),
+    /** Entry-date watermark a routine has swept up to. */
+    sweptThrough: isoDate.optional(),
+    /** When that sweep ran. */
+    sweptAt: z.string().optional(),
+  })
+  .strict();
+
+export const QueueFileSchema = z
+  .object({
+    version: z.literal(1),
+    rows: z.array(QueueRowSchema),
+    /** graph slug → progress. Kept even when a graph has no rows left. */
+    progress: z.record(slug, GraphProgressSchema).default({}),
+  })
+  .strict();
+
+export type QueueRow = z.infer<typeof QueueRowSchema>;
+export type GraphProgress = z.infer<typeof GraphProgressSchema>;
+export type QueueFile = z.infer<typeof QueueFileSchema>;
+
+const EMPTY: QueueFile = { version: 1, rows: [], progress: {} };
+
+/** Errors the HTTP layer maps to status codes — never by matching on messages. */
+export class UnknownGraphError extends Error {}
+export class UnknownCandidateError extends Error {}
+export class AlreadyMemberError extends Error {}
+export class BlockedCandidateError extends Error {
+  constructor(
+    message: string,
+    readonly blockedBy: string[],
+  ) {
+    super(message);
+  }
+}
+export class StaleSummaryError extends Error {}
+
+// --- storage ------------------------------------------------------------
+
+export async function readQueue(): Promise<QueueFile> {
+  let raw: string;
+  try {
+    raw = await readFile(QUEUE_PATH, "utf8");
+  } catch {
+    return { ...EMPTY };
+  }
+  // A malformed queue must not take the whole CLI down with it — the rows are
+  // proposals, and losing them costs one re-sweep.
+  const parsed = QueueFileSchema.safeParse(JSON.parse(raw));
+  return parsed.success ? parsed.data : { ...EMPTY };
+}
+
+export async function writeQueue(file: QueueFile, message: string): Promise<void> {
+  const validated = QueueFileSchema.parse(file);
+  await mkdir(join(MEMORY_DIR, "graphs"), { recursive: true });
+  const tmp = `${QUEUE_PATH}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(validated, null, 2)}\n`, "utf8");
+  await rename(tmp, QUEUE_PATH);
+  // The add-time auto-commit hook only fires on `add`; everything else that
+  // writes into the private store commits explicitly.
+  await commitMemoryRepo(message, MEMORY_DIR);
+}
+
+const keyOf = (id: string, graph: string): string => `${id}\u0000${graph}`;
+
+// --- enqueue ------------------------------------------------------------
+
+export interface EnqueueInput {
+  id: string;
+  graph: string;
+  action?: "copy" | "move";
+  reason: string;
+  proposedBy: string;
+  summary?: string;
+  /** Propose again even though the user declined this entry at its current content. */
+  force?: boolean;
+}
+
+export interface EnqueueResult {
+  id: string;
+  graph: string;
+  queued: boolean;
+  /** Why not, when `queued` is false. A sweep keeps going rather than aborting. */
+  refusal?: string;
+  /** True when this replaced an existing row. */
+  replaced?: boolean;
+  /** Set when the replaced row carried a summary — drafted work, worth saying out loud. */
+  replacedSummary?: boolean;
+}
+
+/**
+ * Propose one entry for one graph. Refuses by *returning*, never throwing:
+ * a routine sweeping a hundred candidates should report the skips and carry
+ * on, not die on the first one.
+ */
+export async function enqueue(input: EnqueueInput): Promise<EnqueueResult> {
+  const results = await enqueueMany([input]);
+  return results[0]!;
+}
+
+/** Propose several at once — one file write and one commit for the batch. */
+export async function enqueueMany(inputs: EnqueueInput[]): Promise<EnqueueResult[]> {
+  if (inputs.length === 0) return [];
+  // A writer, so it builds the slot rather than refusing on an unbuilt one —
+  // the same contract copy/move/link follow.
+  const catalog = await openCatalogForWrite();
+  const metas = await catalog.byIds([...new Set(inputs.map((i) => i.id))]);
+  const byId = new Map(metas.map((e) => [e.id, e]));
+  // One hydrate for the batch: a sweep can enqueue a hundred candidates.
+  const bodyById = new Map((await catalog.hydrate(metas)).map((e) => [e.id, e.body]));
+  const dismissals = await readPromotionDismissals();
+  const file = await readQueue();
+  const rows = new Map(file.rows.map((r) => [keyOf(r.id, r.graph), r]));
+
+  const out: EnqueueResult[] = [];
+  const now = new Date().toISOString();
+  let changed = false;
+
+  for (const input of inputs) {
+    const refuse = (refusal: string): void => {
+      out.push({ id: input.id, graph: input.graph, queued: false, refusal });
+    };
+    let graph: string;
+    try {
+      graph = requireGraph(input.graph);
+    } catch (err) {
+      refuse(err instanceof Error ? err.message : String(err));
+      continue;
+    }
+    if (graph === DEFAULT_GRAPH) {
+      refuse("the default graph is every entry's home, never a review target");
+      continue;
+    }
+    const entry = byId.get(input.id);
+    if (!entry) {
+      refuse(`no entry with id '${input.id}'`);
+      continue;
+    }
+    if (!entry.graphs.includes(DEFAULT_GRAPH)) {
+      refuse(`'${input.id}' has no private home — copies originate from the default graph`);
+      continue;
+    }
+    if (entry.graphs.includes(graph)) {
+      refuse(`'${input.id}' is already a member of '${graph}'`);
+      continue;
+    }
+    const action = input.action ?? "copy";
+    if (action === "move" && input.summary !== undefined) {
+      refuse("a move cannot carry a summary — a moved entry has no private home to diverge from");
+      continue;
+    }
+    if (!input.force && declined(dismissals, input.id, graph, entry.hash)) {
+      refuse(`you already declined '${input.id}' for '${graph}' at its current content`);
+      continue;
+    }
+
+    const key = keyOf(input.id, graph);
+    const previous = rows.get(key);
+    rows.set(key, {
+      id: input.id,
+      graph,
+      action,
+      bodyHash: hashBody(bodyById.get(input.id) ?? ""),
+      ...(input.summary ? { summary: input.summary } : {}),
+      reason: input.reason,
+      proposedBy: input.proposedBy,
+      proposedAt: now,
+    });
+    changed = true;
+    out.push({
+      id: input.id,
+      graph,
+      queued: true,
+      ...(previous ? { replaced: true } : {}),
+      // Overwriting a drafted redaction is real work lost — callers say so.
+      ...(previous?.summary ? { replacedSummary: true } : {}),
+    });
+  }
+
+  if (changed) {
+    const queued = out.filter((r) => r.queued).length;
+    await writeQueue(
+      { ...file, rows: [...rows.values()] },
+      `Queue review: ${queued} candidate${queued === 1 ? "" : "s"}`,
+    );
+  }
+  return out;
+}
+
+function declined(
+  dismissals: PromotionDismissal[],
+  id: string,
+  graph: string,
+  hash: string,
+): boolean {
+  return dismissals.some(
+    (d) => d.id === id && dismissalGraph(d) === graph && d.hash === hash,
+  );
+}
+
+// --- reading ------------------------------------------------------------
+
+export interface ReconciledRow extends QueueRow {
+  /** "ready" to act on, or "stale" — a drafted summary whose entry has moved on. */
+  state: "ready" | "stale";
+  /** Ids this entry references that are not members of `graph` yet. */
+  blockedBy: string[];
+  date: string;
+  type: string;
+  title: string;
+  path: string;
+  /**
+   * The start of the entry's own body — present only when the row proposes a
+   * summary, so the reviewer can compare the two wordings side by side.
+   * Omitted otherwise: there is nothing to compare, and the payload would
+   * carry every body in the queue for no reason.
+   */
+  excerpt?: string;
+}
+
+/** How much of the private body a summary row carries for comparison. */
+const EXCERPT_CHARS = 600;
+
+export interface GraphQueue extends GraphProgress {
+  graph: string;
+  /** Rows waiting, after reconciliation. */
+  pending: number;
+  /** How many of those need something done before they can be approved. */
+  blocked: number;
+  /** How many carry a summary drafted against an entry that has since changed. */
+  stale: number;
+  /** Current members of the graph — context for "is this graph being fed?". */
+  members: number;
+}
+
+export interface QueueView {
+  generatedAt: string;
+  totalPending: number;
+  graphs: GraphQueue[];
+  rows: ReconciledRow[];
+}
+
+/**
+ * The queue as it actually stands. Rows are judged against live state and the
+ * dead ones are dropped (and persisted as dropped, since rows carry bodies and
+ * would otherwise accumulate). Stale-variant re-reviews are *derived* here and
+ * never stored: a row that only exists while the condition holds cannot itself
+ * go stale, and it disappears the moment the user re-approves.
+ */
+export async function queueView(opts: { graph?: string } = {}): Promise<QueueView> {
+  const file = await readQueue();
+  const catalog = await openCatalog();
+  const all = await catalog.all();
+  const byId = new Map(all.map((e) => [e.id, e]));
+  const dismissals = await readPromotionDismissals();
+  const known = new Set(listGraphStores().map((s) => s.graph));
+
+  const keep: QueueRow[] = [];
+  for (const row of file.rows) {
+    const entry = byId.get(row.id);
+    if (!entry) continue; // the memory is gone
+    if (!known.has(row.graph)) continue; // the graph is gone
+    if (entry.graphs.includes(row.graph)) continue; // approved, or copied by hand
+    if (!entry.graphs.includes(DEFAULT_GRAPH)) continue; // no home to copy from
+    if (declined(dismissals, row.id, row.graph, entry.hash)) continue; // the user said no
+    keep.push(row);
+  }
+  if (keep.length !== file.rows.length) {
+    await writeQueue({ ...file, rows: keep }, "Queue review: drop resolved candidates");
+  }
+
+  const hydrated = await catalog.hydrate(
+    keep.map((r) => byId.get(r.id)!).filter((e, i, a) => a.indexOf(e) === i),
+  );
+  const bodyById = new Map(hydrated.map((e) => [e.id, e.body]));
+
+  const rows: ReconciledRow[] = keep.map((row) => {
+    const entry = byId.get(row.id)!;
+    const liveBody = hashBody(bodyById.get(row.id) ?? "");
+    // Only a drafted summary depends on the words. A plain copy proposal does
+    // not, so a changed entry just re-anchors rather than demanding a re-read.
+    const state: "ready" | "stale" =
+      row.summary !== undefined && row.bodyHash !== liveBody ? "stale" : "ready";
+    const body = bodyById.get(row.id) ?? "";
+    return {
+      ...row,
+      state,
+      blockedBy: blockedRefs(byId, entry, row.graph),
+      date: entry.date,
+      type: entry.type,
+      title: entry.title,
+      path: entry.path,
+      ...(row.summary !== undefined
+        ? {
+            excerpt:
+              body.length > EXCERPT_CHARS ? `${body.slice(0, EXCERPT_CHARS).trimEnd()}…` : body,
+          }
+        : {}),
+    };
+  });
+
+  const scoped = opts.graph ? rows.filter((r) => r.graph === opts.graph) : rows;
+  scoped.sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+
+  const graphs: GraphQueue[] = listGraphStores()
+    .map((s) => s.graph)
+    .filter((g) => g !== DEFAULT_GRAPH)
+    .filter((g) => (opts.graph ? g === opts.graph : true))
+    .map((graph) => {
+      const mine = rows.filter((r) => r.graph === graph);
+      return {
+        graph,
+        pending: mine.length,
+        blocked: mine.filter((r) => r.blockedBy.length > 0).length,
+        stale: mine.filter((r) => r.state === "stale").length,
+        members: all.filter((e) => e.graphs.includes(graph)).length,
+        ...(file.progress[graph] ?? {}),
+      };
+    });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totalPending: rows.length,
+    graphs,
+    rows: scoped,
+  };
+}
+
+/** One row, by its key. Throws `UnknownCandidateError` when it is not pending. */
+export async function requireRow(id: string, graph: string): Promise<ReconciledRow> {
+  const view = await queueView({ graph });
+  const row = view.rows.find((r) => r.id === id);
+  if (!row) throw new UnknownCandidateError(`'${id}' is not queued for '${graph}'`);
+  return row;
+}
+
+// --- decisions ----------------------------------------------------------
+
+export interface ApproveResult {
+  id: string;
+  graph: string;
+  action: "copy" | "move";
+  path: string;
+  /** The home body hash the published summary was approved against. */
+  variantOf?: string;
+}
+
+/**
+ * Act on one row. `variant: "summary"` publishes the drafted redaction;
+ * `"raw"` publishes the entry's own words. Everything is re-validated against
+ * live state rather than trusted from the row — the row may have been written
+ * long before the user got to it.
+ */
+export async function approveCandidate(opts: {
+  id: string;
+  graph: string;
+  variant: "summary" | "raw";
+}): Promise<ApproveResult> {
+  const row = await requireRow(opts.id, opts.graph);
+  if (row.blockedBy.length > 0) {
+    throw new BlockedCandidateError(
+      `'${row.id}' references entries that are not in '${row.graph}': ${row.blockedBy.join(", ")}`,
+      row.blockedBy,
+    );
+  }
+  if (opts.variant === "summary") {
+    if (row.summary === undefined) {
+      throw new UnknownCandidateError(`'${row.id}' has no drafted summary for '${row.graph}'`);
+    }
+    if (row.state === "stale") {
+      throw new StaleSummaryError(
+        `the summary for '${row.id}' was drafted against an older version of the entry — ` +
+          `re-draft it, or approve the entry's own wording instead`,
+      );
+    }
+  }
+
+  const { copyEntry, moveEntry } = await import("./membership.js");
+  let path: string;
+  let variantOf: string | undefined;
+  if (row.action === "move") {
+    const res = await moveEntry({ id: row.id, to: row.graph });
+    if (!res.changed) {
+      throw new BlockedCandidateError(
+        `'${row.id}' could not be moved into '${row.graph}'`,
+        res.blockedBy?.ids ?? [],
+      );
+    }
+    path = res.path!;
+  } else {
+    const res = await copyEntry({
+      id: row.id,
+      to: row.graph,
+      ...(opts.variant === "summary" ? { variantBody: row.summary } : {}),
+    });
+    if (!res.changed) {
+      throw new BlockedCandidateError(
+        `'${row.id}' could not be copied into '${row.graph}'`,
+        res.blockedBy ?? [],
+      );
+    }
+    path = res.path!;
+    variantOf = res.variantOf;
+  }
+
+  // Drop the row only once the copy actually landed. A crash in between leaves
+  // a row for an already-member entry, which the next read reconciles away.
+  await dropRow(row.id, row.graph, `Queue review: approve ${row.id} → ${row.graph}`);
+  await markReviewed(row.graph);
+  return { id: row.id, graph: row.graph, action: row.action, path, ...(variantOf ? { variantOf } : {}) };
+}
+
+/** Decline one row. The "no" is remembered until the entry's content changes. */
+export async function dismissCandidate(opts: {
+  id: string;
+  graph: string;
+  reason?: string;
+}): Promise<void> {
+  await requireRow(opts.id, opts.graph);
+  await dismissPromotion(opts.id, opts.graph, opts.reason);
+  await dropRow(opts.id, opts.graph, `Queue review: decline ${opts.id} for ${opts.graph}`);
+  await markReviewed(opts.graph);
+}
+
+async function dropRow(id: string, graph: string, message: string): Promise<void> {
+  const file = await readQueue();
+  const rows = file.rows.filter((r) => !(r.id === id && r.graph === graph));
+  if (rows.length !== file.rows.length) await writeQueue({ ...file, rows }, message);
+}
+
+/** Remove every row for a graph — used when the graph itself is deleted. */
+export async function purgeGraph(graph: string): Promise<number> {
+  const file = await readQueue();
+  const rows = file.rows.filter((r) => r.graph !== graph);
+  const removed = file.rows.length - rows.length;
+  const { [graph]: _gone, ...progress } = file.progress;
+  if (removed > 0 || _gone !== undefined) {
+    await writeQueue({ ...file, rows, progress }, `Queue review: drop rows for ${graph}`);
+  }
+  return removed;
+}
+
+// --- progress -----------------------------------------------------------
+
+async function setProgress(graph: string, patch: GraphProgress, message: string): Promise<GraphProgress> {
+  const file = await readQueue();
+  const next: GraphProgress = { ...(file.progress[graph] ?? {}), ...patch };
+  await writeQueue({ ...file, progress: { ...file.progress, [graph]: next } }, message);
+  return next;
+}
+
+export async function markReviewed(graph: string, at = new Date().toISOString()): Promise<GraphProgress> {
+  return setProgress(graph, { lastReviewedAt: at }, `Queue review: ${graph} reviewed`);
+}
+
+/**
+ * Record how far a routine has swept a graph, so the next sweep can pick up
+ * where it left off. Monotonic: re-running an older window must not erase
+ * progress, which is easy to do by accident when a sweep is scripted.
+ */
+export async function markSwept(
+  graph: string,
+  opts: { through?: string; at?: string; force?: boolean } = {},
+): Promise<GraphProgress> {
+  const target = requireGraph(graph);
+  if (target === DEFAULT_GRAPH) throw new UnknownGraphError("the default graph has no review queue");
+  const through = opts.through ?? new Date().toISOString().slice(0, 10);
+  isoDate.parse(through);
+  const file = await readQueue();
+  const current = file.progress[target]?.sweptThrough;
+  if (current && through < current && !opts.force) {
+    throw new Error(
+      `'${target}' is already swept through ${current}; ${through} would move it backwards (use --force)`,
+    );
+  }
+  return setProgress(
+    target,
+    { sweptThrough: through, sweptAt: opts.at ?? new Date().toISOString() },
+    `Queue review: ${target} swept through ${through}`,
+  );
+}

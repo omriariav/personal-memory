@@ -18,7 +18,7 @@ import {
   storeFor,
   writeGraphManifest,
 } from "./graphs.js";
-import { applyRules, readRules, writeRules, type GraphRule } from "./graph-rules.js";
+import { enqueueRules, readRules, writeRules, type GraphRule } from "./graph-rules.js";
 import { getMaintenanceSnapshot, launchMaintenanceRun, startMaintenanceScheduler } from "./scheduled-maintenance.js";
 import { applyChainLink, dismissSlugSuggestion, mergeSlugs, type SlugKind } from "./graph-maintenance.js";
 import { buildChainIndex } from "./chains.js";
@@ -34,6 +34,7 @@ const STATIC: Record<string, { file: string; mime: string }> = {
   "/graph-model.js": { file: "graph-model.js", mime: "text/javascript; charset=utf-8" },
   "/graph-sim.js": { file: "graph-sim.js", mime: "text/javascript; charset=utf-8" },
   "/graphs-map.js": { file: "graphs-map.js", mime: "text/javascript; charset=utf-8" },
+  "/queue-map.js": { file: "queue-map.js", mime: "text/javascript; charset=utf-8" },
   "/combobox.js": { file: "combobox.js", mime: "text/javascript; charset=utf-8" },
   "/style.css": { file: "style.css", mime: "text/css; charset=utf-8" },
 };
@@ -475,10 +476,164 @@ async function apiApplyRules(req: IncomingMessage, res: ServerResponse): Promise
   const rules = parseRulesBody(data);
   try {
     if (rules && !dryRun) await writeRules(rules); // persist alongside a confirmed apply
-    const report = await applyRules({ dryRun, ...(rules ? { rules } : {}) });
+    const report = await enqueueRules({ dryRun, ...(rules ? { rules } : {}) });
     sendJson(res, 200, { dryRun, ...report });
   } catch (err) {
     sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
+ * Review-queue endpoints. `/api/queue*` is a sibling of `/api/graphs*` rather
+ * than nested under it, so it has no interaction with that prefix's
+ * catch-all slug branch. (The UI hash `#/graphs/queue` needs its own
+ * reservation; that is `RESERVED_SLUGS` in graphs.ts, the way `rules` already
+ * works.)
+ *
+ * Every mutation needs `confirm: true`. Approving is the only write in this
+ * server that puts something into a store whose purpose is to be handed to
+ * other people, so it gets the same gate as graph creation and deletion.
+ */
+
+/** Map the queue module's typed errors onto status codes — never by message. */
+async function queueError(res: ServerResponse, err: unknown): Promise<void> {
+  const q = await import("./graph-queue.js");
+  if (err instanceof q.UnknownGraphError) {
+    sendJson(res, 404, { error: err.message });
+  } else if (err instanceof q.UnknownCandidateError) {
+    sendJson(res, 404, { error: err.message });
+  } else if (err instanceof q.BlockedCandidateError) {
+    sendJson(res, 409, { error: err.message, blockedBy: err.blockedBy });
+  } else if (err instanceof q.StaleSummaryError) {
+    sendJson(res, 409, { error: err.message, stale: true });
+  } else {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function apiQueue(res: ServerResponse, graph?: string): Promise<void> {
+  if (graph === DEFAULT_GRAPH) {
+    sendJson(res, 400, { error: "the default graph is every entry's home — it has no review queue" });
+    return;
+  }
+  const catalog = await openCatalogOr503(res);
+  if (!catalog) return;
+  try {
+    if (graph) storeFor(graph); // registry validation before we build a view
+  } catch {
+    sendJson(res, 404, { error: `unknown graph '${graph}'` });
+    return;
+  }
+  const { queueView } = await import("./graph-queue.js");
+  const view = await queueView(graph ? { graph } : {});
+  sendJson(res, 200, {
+    ...view,
+    rows: view.rows.map((r) => ({ ...r, path: relative(ROOT, r.path) })),
+  });
+}
+
+async function apiQueueApprove(req: IncomingMessage, res: ServerResponse, graph: string): Promise<void> {
+  let data: Record<string, unknown>;
+  try {
+    data = (JSON.parse((await readBody(req, 32 * 1024)) || "{}") ?? {}) as Record<string, unknown>;
+  } catch (err) {
+    sendJson(res, (err as { status?: number }).status ?? 400, {
+      error: err instanceof Error ? err.message : "invalid JSON body",
+    });
+    return;
+  }
+  if (data.confirm !== true) {
+    sendJson(res, 400, { error: "publishing into a shared graph requires confirm: true" });
+    return;
+  }
+  const id = typeof data.id === "string" ? data.id : "";
+  if (!id) {
+    sendJson(res, 400, { error: "id is required" });
+    return;
+  }
+  const variant = data.variant === "summary" ? "summary" : "raw";
+  try {
+    const { approveCandidate } = await import("./graph-queue.js");
+    const result = await approveCandidate({ id, graph, variant });
+    sendJson(res, 200, { ...result, path: relative(ROOT, result.path) });
+  } catch (err) {
+    await queueError(res, err);
+  }
+}
+
+async function apiQueueDismiss(req: IncomingMessage, res: ServerResponse, graph: string): Promise<void> {
+  let data: Record<string, unknown>;
+  try {
+    data = (JSON.parse((await readBody(req, 32 * 1024)) || "{}") ?? {}) as Record<string, unknown>;
+  } catch (err) {
+    sendJson(res, (err as { status?: number }).status ?? 400, {
+      error: err instanceof Error ? err.message : "invalid JSON body",
+    });
+    return;
+  }
+  if (data.confirm !== true) {
+    sendJson(res, 400, { error: "declining a candidate requires confirm: true" });
+    return;
+  }
+  const id = typeof data.id === "string" ? data.id : "";
+  if (!id) {
+    sendJson(res, 400, { error: "id is required" });
+    return;
+  }
+  try {
+    const { dismissCandidate } = await import("./graph-queue.js");
+    await dismissCandidate({
+      id,
+      graph,
+      ...(typeof data.reason === "string" && data.reason ? { reason: data.reason } : {}),
+    });
+    sendJson(res, 200, { dismissed: true, id, graph });
+  } catch (err) {
+    await queueError(res, err);
+  }
+}
+
+/**
+ * Queue a blocked candidate's blocker, so the user can clear a blockage from
+ * the card rather than dropping to the CLI. It proposes — it does not approve.
+ */
+async function apiQueueEnqueue(req: IncomingMessage, res: ServerResponse, graph: string): Promise<void> {
+  let data: Record<string, unknown>;
+  try {
+    data = (JSON.parse((await readBody(req, 32 * 1024)) || "{}") ?? {}) as Record<string, unknown>;
+  } catch (err) {
+    sendJson(res, (err as { status?: number }).status ?? 400, {
+      error: err instanceof Error ? err.message : "invalid JSON body",
+    });
+    return;
+  }
+  if (data.confirm !== true) {
+    sendJson(res, 400, { error: "queueing a candidate requires confirm: true" });
+    return;
+  }
+  const id = typeof data.id === "string" ? data.id : "";
+  if (!id) {
+    sendJson(res, 400, { error: "id is required" });
+    return;
+  }
+  try {
+    const { enqueue } = await import("./graph-queue.js");
+    const because = typeof data.becauseOf === "string" ? data.becauseOf : "";
+    const result = await enqueue({
+      id,
+      graph,
+      reason: because
+        ? `needed in '${graph}' before '${because}' can join — it is referenced by it`
+        : `queued from the review screen`,
+      proposedBy: "review",
+    });
+    if (!result.queued) {
+      sendJson(res, 409, { error: result.refusal ?? "could not be queued" });
+      return;
+    }
+    sendJson(res, 200, result);
+  } catch (err) {
+    await queueError(res, err);
   }
 }
 
@@ -599,6 +754,58 @@ async function apiDismissSlugMerge(req: IncomingMessage, res: ServerResponse): P
   }
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+function isLoopbackHost(value: string | undefined): boolean {
+  if (!value) return false;
+  // `new URL` gives us host-vs-port splitting that also handles [::1]:4664.
+  try {
+    return LOOPBACK_HOSTS.has(new URL(`http://${value}`).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Does this request carry a loopback `Host`? Required of EVERY request, read
+ * or write, because this is the anti-DNS-rebinding control and reads are the
+ * juicier target: `/api/data` returns every entry in the store, private graph
+ * included, with full bodies.
+ *
+ * Binding 127.0.0.1 does not help here. An attacker's page rebinds its own
+ * hostname to 127.0.0.1, the browser then treats the response as same-origin
+ * with THAT hostname — so CORS never applies and the page can read the
+ * answer. What the attacker cannot do is forge the `Host` header: it still
+ * says the hostname the browser dialed. Exported for unit tests.
+ */
+export function isLoopbackRequest(headers: { host?: string }): boolean {
+  return isLoopbackHost(headers.host);
+}
+
+/**
+ * Guard for state-changing requests: loopback `Host` (above) AND a loopback
+ * `Origin` when the browser sends one. A cross-origin write is never
+ * legitimate here — the only client is the UI this server itself serves.
+ * Matters most for the review queue, whose approve endpoint is the one write
+ * that publishes into a shareable store.
+ *
+ * `Origin` is absent on non-browser clients (curl, the test harness) and on
+ * some same-origin navigations, so an absent Origin passes; a present one must
+ * be loopback. Exported for unit tests.
+ */
+export function isLoopbackWrite(headers: { origin?: string; host?: string }): boolean {
+  if (!isLoopbackHost(headers.host)) return false;
+  const origin = headers.origin;
+  // "null" is what a sandboxed iframe or a file:// page sends — not same-origin.
+  if (origin === undefined || origin === "") return true;
+  if (origin === "null") return false;
+  try {
+    return LOOPBACK_HOSTS.has(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function openBrowser(url: string): void {
   const cmd =
     process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
@@ -629,6 +836,28 @@ export function startServer(opts: { port: number; open: boolean }): Promise<neve
       }
     });
     try {
+      const method = req.method ?? "GET";
+      // Reads first: a rebound hostname can read /api/data, which is the whole
+      // private store. Nothing legitimate reaches this server under any other
+      // Host, so refuse before any handler runs.
+      if (!isLoopbackRequest(req.headers)) {
+        log("warn", "non-loopback host refused", {
+          method,
+          path: url.pathname,
+          host: req.headers.host,
+        });
+        sendJson(res, 403, { error: "this server answers only on loopback" });
+        return;
+      }
+      if (method !== "GET" && method !== "HEAD" && !isLoopbackWrite(req.headers)) {
+        log("warn", "cross-origin write refused", {
+          method,
+          path: url.pathname,
+          origin: req.headers.origin,
+        });
+        sendJson(res, 403, { error: "cross-origin writes are not allowed" });
+        return;
+      }
       const asset = STATIC[url.pathname];
       if (asset) {
         const body = await readFile(join(UI_DIR, asset.file));
@@ -658,6 +887,22 @@ export function startServer(opts: { port: number; open: boolean }): Promise<neve
         else if (req.method === "GET") await apiGraphManifest(res, slug);
         else if (req.method === "PUT") await apiPutGraphManifest(req, res, slug);
         else if (req.method === "DELETE") await apiDeleteGraph(req, res, slug);
+        else sendJson(res, 405, { error: "method not allowed" });
+      } else if (url.pathname === "/api/queue") {
+        if (req.method === "GET") await apiQueue(res);
+        else sendJson(res, 405, { error: "method not allowed" });
+      } else if (url.pathname.startsWith("/api/queue/")) {
+        // Exact-segment parse, not a prefix test: a graph slugged
+        // `queue-archive` must not be swallowed by `startsWith`.
+        const rest = url.pathname.slice("/api/queue/".length);
+        const slash = rest.indexOf("/");
+        const slug = slash === -1 ? rest : rest.slice(0, slash);
+        const action = slash === -1 ? "" : rest.slice(slash + 1);
+        if (!GRAPH_SLUG.test(slug)) sendJson(res, 404, { error: "not found" });
+        else if (action === "" && req.method === "GET") await apiQueue(res, slug);
+        else if (action === "approve" && req.method === "POST") await apiQueueApprove(req, res, slug);
+        else if (action === "dismiss" && req.method === "POST") await apiQueueDismiss(req, res, slug);
+        else if (action === "enqueue" && req.method === "POST") await apiQueueEnqueue(req, res, slug);
         else sendJson(res, 405, { error: "method not allowed" });
       } else if (url.pathname === "/api/maintenance") {
         if (req.method === "GET") await apiMaintenance(res);
